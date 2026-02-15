@@ -1,0 +1,121 @@
+[project]
+name = "card-fraud-ops-analyst-agent"
+version = "0.1.0"
+description = "Autonomous fraud analyst assistant with deterministic evidence pipeline"
+readme = "README.md"
+requires-python = ">=3.14"  # uuid.uuid7 available in stdlib
+authors = [
+    {name = "Fraud Platform Team", email = "fraud-platform@example.com"}
+]
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "sqlalchemy>=2.0.36",
+    "asyncpg>=0.31.0",
+    "psycopg[binary]>=3.2.0",
+    "python-jose[cryptography]>=3.5.0",
+    "structlog>=24.1.0",
+    "opentelemetry-api>=1.39.1",
+    "opentelemetry-sdk>=1.39.1",
+    "opentelemetry-instrumentation-fastapi>=0.50b1",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.39.1",
+    "prometheus-client>=0.21.0",
+    "httpx>=0.27.0",
+    "orjson>=3.10.0",
+    "tenacity>=8.2.0",
+    "litellm>=1.78.0,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "factory-boy>=3.3.0",
+    "faker>=24.0.0",
+    "pytest-html>=4.1.0",
+    "ruff>=0.8.0",
+    "pytest-mock>=3.14.0",
+    "httpx>=0.27.0",
+    "pre-commit>=4.0.0",
+]
+
+[project.scripts]
+# Development
+dev = "cli.dev:main"
+
+# Auth0 bootstrap and verification
+auth0-bootstrap = "cli.auth0_bootstrap:main"
+auth0-verify = "cli.auth0_verify:main"
+
+# Doppler Development (with secrets from Doppler)
+doppler-local = "cli.doppler_local:main"
+doppler-local-test = "cli.doppler_local:test_local"
+doppler-test = "cli.doppler_local:test"
+doppler-prod = "cli.doppler_local:test_prod"
+
+# Database Setup with Doppler
+db-init = "cli.db_setup:db_init"
+db-init-test = "cli.db_setup:db_init_test"
+db-init-prod = "cli.db_setup:db_init_prod"
+db-reset-tables = "cli.db_setup:db_reset_tables"
+db-reset-tables-test = "cli.db_setup:db_reset_tables_test"
+db-reset-data = "cli.db_setup:db_reset_data"
+db-reset-data-test = "cli.db_setup:db_reset_data_test"
+db-verify = "cli.db_setup:db_verify"
+db-verify-test = "cli.db_setup:db_verify_test"
+db-verify-prod = "cli.db_setup:db_verify_prod"
+db-load-test-data = "cli.db_setup:db_load_test_data"
+db-load-test-data-test = "cli.db_setup:db_load_test_data_test"
+
+# Testing
+test = "cli.test:main"
+test-smoke = "cli.test:test_smoke"
+test-all = "cli.test:test_all"
+
+# API Schema
+generate-openapi = "cli.openapi:main"
+
+# E2E Testing
+e2e-local = "cli.e2e:main"
+
+# Code Quality
+lint = "cli.lint:main"
+format = "cli.lint:format_code"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+    "unit: Unit tests (fast, no DB)",
+    "integration: Integration tests (require DB)",
+    "smoke: Smoke tests (TestClient)",
+    "e2e: End-to-end tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"app/api/routes/*.py" = ["B008"]
+"app/core/auth.py" = ["B008"]
+"tests/*" = ["E501", "B017"]
+"__init__.py" = ["F401"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app", "cli"]

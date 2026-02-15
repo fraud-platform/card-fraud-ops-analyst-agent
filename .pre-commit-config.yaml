@@ -1,0 +1,73 @@
+# Pre-commit hooks for card-fraud-ops-analyst-agent
+# Enforces quality gates before allowing commits
+# Install: uv run pre-commit install
+# Run manually: uv run pre-commit run --all-files
+
+default_language_version:
+  python: python3.14
+
+repos:
+  # Ruff - fast Python linter and formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.1
+    hooks:
+      # Lint - fail on errors
+      - id: ruff
+        name: ruff check (lint)
+        args: [--fix, --exit-non-zero-on-fix]
+        types: [python]
+        files: ^(app|tests|cli|scripts)/
+
+      # Format - fail if not formatted
+      - id: ruff-format
+        name: ruff format (check formatting)
+        args: [--check]
+        types: [python]
+        files: ^(app|tests|cli|scripts)/
+
+  # General whitespace and file ending fixes
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Trim trailing whitespace
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+        exclude: ^(tests/fixtures/|\.min\.js$)
+
+      # Ensure files end with newline
+      - id: end-of-file-fixer
+        name: Fix end of files
+
+      # Check for large files (warn only)
+      - id: check-added-large-files
+        name: Check for large files
+        args: [--maxkb=500]
+
+      # Check for merge conflicts
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+
+      # Check JSON files
+      - id: check-json
+        name: Check JSON files
+
+      # Check YAML files
+      - id: check-yaml
+        name: Check YAML files
+
+      # Check TOML files
+      - id: check-toml
+        name: Check TOML files
+
+# CI: pre-commit.ci will auto-fix issues when PR is opened
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: []
+  submodules: false
