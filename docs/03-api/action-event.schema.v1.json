@@ -1,0 +1,25 @@
+﻿{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fraud-platform/schemas/ops-agent-action-event.v1.json",
+  "title": "OpsAgentActionEventV1",
+  "type": "object",
+  "required": [
+    "event_version",
+    "event_type",
+    "recommendation_id",
+    "action",
+    "performed_by",
+    "performed_at"
+  ],
+  "properties": {
+    "event_version": { "type": "string", "const": "1.0" },
+    "event_type": { "type": "string", "const": "ops_agent.recommendation.action" },
+    "recommendation_id": { "type": "string", "format": "uuid" },
+    "insight_id": { "type": "string", "format": "uuid" },
+    "action": { "type": "string", "enum": ["ACKNOWLEDGED", "REJECTED", "EXPORTED"] },
+    "performed_by": { "type": "string" },
+    "performed_at": { "type": "string", "format": "date-time" },
+    "comment": { "type": "string" }
+  },
+  "additionalProperties": false
+}

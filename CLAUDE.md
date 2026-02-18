@@ -14,7 +14,7 @@ Read `AGENTS.md` before making any changes. It contains:
 ## Quick Reference
 
 ```bash
-# Quality gates (must all pass — 140 unit + 10 smoke = 150 tests)
+# Quality gates (must all pass; run commands for current suite counts)
 uv run ruff check app/ tests/ cli/ scripts/           # Lint
 uv run ruff format --check app/ tests/ cli/ scripts/  # Format
 uv run pytest tests/unit -v                            # Unit tests

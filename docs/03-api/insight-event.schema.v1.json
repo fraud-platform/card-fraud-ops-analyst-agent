@@ -1,0 +1,29 @@
+﻿{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fraud-platform/schemas/ops-agent-insight-event.v1.json",
+  "title": "OpsAgentInsightEventV1",
+  "type": "object",
+  "required": [
+    "event_version",
+    "event_type",
+    "insight_id",
+    "transaction_id",
+    "severity",
+    "summary",
+    "generated_at"
+  ],
+  "properties": {
+    "event_version": { "type": "string", "const": "1.0" },
+    "event_type": { "type": "string", "const": "ops_agent.insight.generated" },
+    "insight_id": { "type": "string", "format": "uuid" },
+    "transaction_id": { "type": "string", "format": "uuid" },
+    "severity": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+    "summary": { "type": "string" },
+    "reason_codes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "generated_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

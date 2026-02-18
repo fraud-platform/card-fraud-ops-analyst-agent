@@ -59,6 +59,19 @@ repos:
       - id: check-toml
         name: Check TOML files
 
+  # Unit tests - run on every commit (fast, no DB required)
+  # Markers auto-applied via conftest.py pytest_collection_modifyitems
+  # Uses .venv Python directly so no activation step is needed
+  - repo: local
+    hooks:
+      - id: pytest-unit
+        name: pytest (unit tests)
+        entry: uv run pytest
+        language: system
+        args: [-m, unit, -q, --tb=short, --no-header]
+        pass_filenames: false
+        always_run: true
+
 # CI: pre-commit.ci will auto-fix issues when PR is opened
 ci:
   autofix_commit_msg: |

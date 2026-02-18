@@ -98,6 +98,9 @@ markers = [
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+log_cli = true
+log_cli_level = "INFO"
+log_level = "DEBUG"
 
 [tool.ruff]
 line-length = 100

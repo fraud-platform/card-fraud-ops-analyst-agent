@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+htmlreports/
+.tox/
+.nox/
+
+# Environment - NO .env files (use Doppler)
+.env
+.env.*
+.env.local
+.env.*.local
+.env.example
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# Secrets - NEVER commit
+*.pem
+*.key
+credentials.json
+
+# uv
+.uv/
+
+# Ruff
+.ruff_cache/
+
+# Claude Code agent memory (private, session-specific)
+.claude/
+memory/
+
+# Generated coverage / report files
+coverage.json
+
+# Docs scratch/archive noise
+docs/archive/_scratch/
+docs/archive/generated/
+docs/archive/*.tmp.md
+docs/archive/*.bak.md
