@@ -1,4 +1,4 @@
-# Agentic ADR/TDD Set
+# Agentic ADR Set
 
 Canonical architecture and implementation references for the LangGraph-based agentic runtime.
 
@@ -14,17 +14,6 @@ Canonical architecture and implementation references for the LangGraph-based age
 - `adr_008_fraud_investigation_toolset_specification.md`
 - `adr_009_transaction_management_integration_specification.md`
 
-## TDDs
+## Scope
 
-- `tdd_001_master_transformation_plan.md`
-- `tdd_002_langgraph_agent_runtime.md`
-- `tdd_003_investigation_toolset.md`
-- `tdd_004_persistence_and_state_management.md`
-- `tdd_005_api_services_and_schemas.md`
-- `tdd_006_testing_and_quality_strategy.md`
-- `tdd_007_tm_integration_analysis_and_implementation_addendum.md`
-- `tdd_008_security_auditing_observability_and_operational_readiness.md`
-
-## Program Notes
-
-- `comprehensive-review-and-cleanup-plan.md`
+This folder keeps long-lived architecture decisions only. Transitional planning and migration execution notes were removed to keep references current and maintainable.

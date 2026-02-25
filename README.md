@@ -183,8 +183,7 @@ This is an intelligence platform with agentic analysis, not autonomous adjudicat
 ## Documentation
 
 - [Code Map](./docs/codemap.md) - architecture overview, modules, data flow, patterns
-- [Developer Guide](./DEVELOPER_GUIDE.md) - setup, workflow, architecture
-- [Agent Conventions](./AGENTS.md) - quality gates, coding standards, no-shortcuts policy
+- [Developer Guide](./docs/02-development/developer-guide.md) - setup, workflow, runtime, and quality gates
 - [Docs Index](./docs/README.md) - architecture, API, testing, deployment, operations
 - [Local Setup](./docs/01-setup/local-setup.md) - step-by-step local environment setup
 - [Config and Feature Flags](./docs/05-deployment/config-and-feature-flags.md) - all environment variables

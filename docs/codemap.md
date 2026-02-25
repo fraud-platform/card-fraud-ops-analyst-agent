@@ -1,98 +1,73 @@
-# Code and Document Map
+# Code Map
 
-## Repository Layout
+Current implementation map for the LangGraph-based agentic fraud ops analyst service.
 
-- `README.md` - top-level project purpose and constraints
-- `AGENTS.md` - agent execution guardrails
-- `CLAUDE.md` - project instructions and quick reference
-- `DEVELOPER_GUIDE.md` - workflow for this planning phase
-- `docs/` - canonical setup, architecture, API, deployment, and operations docs
-- `/api/v1/metrics` - Prometheus scrape endpoint (requires `X-Metrics-Token`)
+## Top-Level Layout
 
-## Docs by Responsibility
+- `app/` - FastAPI app, graph runtime, tools, persistence, schemas
+- `cli/` - `uv run` command entry points
+- `scripts/` - local utilities (E2E runner, seed scripts, reporting helpers)
+- `db/migrations/` - SQL migrations for `ops_agent_*` tables
+- `docs/` - canonical project documentation
+- `tests/` - unit, integration, smoke, E2E tests
 
-- `docs/01-setup/` - onboarding and environment assumptions
-- `docs/02-development/` - architecture, design, and performance patterns
-- `docs/03-api/` - API and event contracts
-- `docs/04-testing/` - validation strategy and acceptance matrix
-- `docs/05-deployment/` - deployment design, configuration, and release gates
-- `docs/06-operations/` - runbooks, observability, governance, and database operations
-- `docs/07-reference/` - ADRs and cross-repo references
+## Application Modules
 
-## Primary Design Documents
+### `app/agent/`
 
-- Architecture: `docs/02-development/architecture.md`
-- Data model: `docs/02-development/domain-and-data-model.md`
-- API contract: `docs/03-api/ops-agent-api-contract-v1.md`
-- Release gates: `docs/05-deployment/release-gates.md`
-- Security policy: `docs/06-operations/security-and-data-governance.md`
-- Security config: `docs/05-deployment/security-configuration.md`
-- Performance patterns: `docs/02-development/performance-patterns.md`
-- Database operations: `docs/06-operations/database-operations.md`
-- ADR index: `docs/07-reference/overview.md`
+- `graph.py` - LangGraph graph assembly and node wiring
+- `planner.py` - next-step selection logic
+- `executor.py` - tool execution + per-stage summaries
+- `completion.py` - final response assembly
+- `state.py` - investigation state schema + update helpers
+- `registry.py` - tool registry
 
-## Complete Documentation Index
+### `app/tools/`
 
-### 01-setup - Setup
-- `local-setup.md` - Local development environment setup
-- `doppler-secrets-setup.md` - Doppler secrets management
-- `database-access-and-roles.md` - Database access and role configuration
-- `auth0-setup-guide.md` - Auth0 tenant and API setup
+- `context_tool.py` - transaction + history context loading
+- `pattern_tool.py` - fraud pattern scoring
+- `similarity_tool.py` - embedding + vector candidate retrieval
+- `reasoning_tool.py` - LLM-based reasoning synthesis
+- `recommendation_tool.py` - analyst action recommendations
+- `rule_draft_tool.py` - draft rule package generation
+- `_core/` - pure logic modules shared by tools
 
-### 02-development - Development
-- `architecture.md` - System mission, principles, topology, service modules
-- `domain-and-data-model.md` - Core entities, relationships, state transitions
-- `agent-workflow-and-orchestration.md` - Pipeline orchestration and agent coordination
-- `storage-and-migrations.md` - Schema design, migrations, indexing, SQL injection prevention
-- `idempotency-and-replay.md` - Idempotency keys and replay protection
-- `performance-patterns.md` - Parallel queries, caching, timeouts, best practices
-- `app/templates/trace_viewer.py` - Self-contained HTML trace viewer template
+### `app/services/`
 
-### 03-api - API
-- `openapi-outline.md` - OpenAPI specification overview
-- `ops-agent-api-contract-v1.md` - API contract documentation
-- `openapi.json` - Full OpenAPI specification
-- `portal-integration.md` - Portal integration guide
-- `rule-draft-package.schema.v1.json` - Rule draft package schema
-- `insight-event.schema.v1.json` - Insight event schema
-- `action-event.schema.v1.json` - Action event schema
+- `investigation_service.py` - run/resume/get/list investigations, trace assembly
+- `recommendation_service.py` - worklist and acknowledgement operations
 
-### 04-testing - Testing
-- `testing-strategy.md` - Testing strategy and approach
-- `acceptance-test-matrix.md` - Acceptance test criteria
-- `non-functional-test-plan.md` - Non-functional test planning
+### `app/persistence/`
 
-### 05-deployment - Deployment
-- `platform-docker-integration.md` - Docker and platform integration
-- `config-and-feature-flags.md` - Feature flags, LLM config, reload behavior
-- `security-configuration.md` - CORS, JWT, authorization, security headers
-- `release-gates.md` - Pre-release validation and approval process
-- `production-readiness-checklist.md` - Production readiness validation
+- `investigation_repository.py`
+- `state_store.py`
+- `tool_log_repository.py`
+- `insight_repository.py`
+- `recommendation_repository.py`
+- `rule_draft_repository.py`
+- `audit_repository.py`
 
-### 06-operations - Operations
-- `database-operations.md` - Pool tuning, query security, maintenance, troubleshooting
-- `runbooks.md` - Step-by-step operational procedures
-- `observability.md` - Metrics, logs, traces, audit events
-- `security-and-data-governance.md` - Access controls, audit logging, compliance
-- `model-risk-and-prompt-governance.md` - LLM usage policies and testing
-- `incidents-and-rollback.md` - Incident response and rollback procedures
-- `performance-baselines.md` - Performance targets and alerting thresholds
+### `app/api/routes/`
 
-### 07-reference - Reference
-- `overview.md` - Reference documentation index
-- `fraud-analyst-workflow.md` - Fraud analyst workflow documentation
-- `auth-model.md` - Authentication and authorization model
-- `0000-use-adr.md` - ADR template
-- `0001-tm-as-source-of-truth.md` - Transaction Management as source of truth
-- `0002-human-approval-finality.md` - Human approval finality policy
-- `0003-fraud-gov-shared-schema-agent-tables.md` - Shared schema and agent tables
-- `0005-redaction-and-pseudonym-policy.md` - Redaction and pseudonymization policy
-- `0006-rule-draft-package-and-maker-checker-handoff.md` - Rule draft handoff process
-- `0008-rollout-gating-and-slo-policy.md` - Rollout gating and SLO policy
-- `agentic/README.md` - Agentic architecture ADR/TDD index
-- `agentic/adr_001_agentic_fraud_analyst_architecture.md` - Agentic runtime architecture decision
-- `agentic/tdd_001_master_transformation_plan.md` - Agentic transformation implementation plan
+- `investigations.py`
+- `insights.py`
+- `recommendations.py`
+- `health.py`
+- `monitoring.py`
 
-## Program Plan
+## Request Flow
 
-- `07-reference/agentic/comprehensive-review-and-cleanup-plan.md` - Agentic modernization and cleanup plan
+1. `POST /api/v1/ops-agent/investigations/run`
+2. `InvestigationService.run_investigation()`
+3. `agent/graph.py` executes planner/tool loop
+4. Tool outputs persist into `ops_agent_*` tables
+5. Response includes investigation summary + agent trace metadata
+
+## Canonical Docs
+
+- `docs/README.md` - docs index
+- `docs/02-development/developer-guide.md` - developer workflow
+- `docs/02-development/architecture.md` - architecture details
+- `docs/03-api/ops-agent-api-contract-v1.md` - API contract
+- `docs/06-operations/runbooks.md` - runtime operations
+- `docs/07-reference/agentic/` - long-lived agentic ADR references

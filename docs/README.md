@@ -21,6 +21,7 @@ Documentation-first repository for enterprise-grade ops analyst agent implementa
 
 ### `02-development` - Development
 
+- `02-development/developer-guide.md`
 - `02-development/architecture.md`
 - `02-development/domain-and-data-model.md`
 - `02-development/agent-workflow-and-orchestration.md`
@@ -75,7 +76,7 @@ Documentation-first repository for enterprise-grade ops analyst agent implementa
 - `07-reference/0008-rollout-gating-and-slo-policy.md`
 - `07-reference/agentic/README.md`
 - `07-reference/agentic/adr_001_agentic_fraud_analyst_architecture.md`
-- `07-reference/agentic/tdd_001_master_transformation_plan.md`
+- `07-reference/agentic/adr_009_transaction_management_integration_specification.md`
 
 ### Archive Policy
 
@@ -86,3 +87,4 @@ Documentation-first repository for enterprise-grade ops analyst agent implementa
 
 - `docs/README.md`
 - `docs/codemap.md`
+- `docs/02-development/developer-guide.md`

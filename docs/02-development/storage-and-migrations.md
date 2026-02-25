@@ -117,4 +117,10 @@ Every query must satisfy:
 
 ### Reference Implementation
 
-See `app/persistence/context_reader.py` for correct parameterized query patterns throughout the codebase. All read-only queries on TM tables follow this security pattern.
+Use current repository/client implementations as reference:
+
+- `app/persistence/investigation_repository.py`
+- `app/persistence/insight_repository.py`
+- `app/persistence/recommendation_repository.py`
+- `app/persistence/rule_draft_repository.py`
+- `app/clients/tm_client.py` (TM API access path)

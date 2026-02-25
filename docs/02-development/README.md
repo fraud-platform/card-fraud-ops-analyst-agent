@@ -4,6 +4,8 @@ Architecture and engineering design documents for the Ops Analyst Agent.
 
 ## Documentation
 
+- **[Developer Guide](./developer-guide.md)**: Day-to-day local workflow, commands, quality gates, and agent runtime orientation.
+
 - **[Architecture](./architecture.md)**: System mission, architectural principles, integration topology, internal service modules, processing modes, and reliability targets.
 
 - **[Domain and Data Model](./domain-and-data-model.md)**: Core domain entities (transactions, investigations, insights, recommendations, rule drafts), their relationships, and state transitions.
