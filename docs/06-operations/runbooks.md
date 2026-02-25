@@ -6,7 +6,7 @@ This document provides step-by-step procedures for common operational scenarios.
 
 | Scenario | Severity | First Action | Escalation |
 |----------|----------|--------------|------------|
-| Investigation pipeline failure | SEV2 | Check feature flags, enable fallback mode | Platform team |
+| Investigation runtime failure | SEV2 | Check feature flags, enable fallback mode | Platform team |
 | Database connection exhaustion | SEV2 | Check pool metrics, restart workers if needed | DBA team |
 | LLM service degradation | SEV3 | Enable fallback mode, check provider status | LLM provider |
 | High latency investigations | SEV3 | Review traces, check vector search | N/A |
@@ -34,12 +34,12 @@ Default platform posture:
 
 ## Common Operational Scenarios
 
-### 1. Investigation Pipeline Failure
+### 1. Investigation Runtime Failure
 
 **Symptoms:**
 - `POST /api/v1/ops-agent/investigations/run` returns 500 or 503
 - Error logs showing `OpsAgentError` variants
-- Metrics spike in `ops_agent_dependency_failures_total`
+- Metrics spike in `ops_agent_dependency_failures_total{dependency=...}`
 
 **Diagnosis:**
 ```bash
@@ -87,7 +87,7 @@ jaeger: http://localhost:16686
 
 **Prevention:**
 - Keep `OPS_AGENT_ENABLE_LLM_REASONING=true` and `VECTOR_ENABLED=true` in normal operation; only disable temporarily during incidents.
-- Monitor `ops_agent_dependency_failures_total` by dependency type
+- Monitor `ops_agent_dependency_failures_total` by dependency
 - Set up alerts for error ratio > 2% for 10 minutes
 
 ---
@@ -136,7 +136,7 @@ WHERE usename = 'ops_agent_app'
 2. **Root cause analysis:**
    - Check for long-running queries in traces
    - Verify connection recycling is working (1800s default)
-   - Review worker count (4 workers × 20 connections = 80 max)
+   - Review worker count (4 workers x 20 connections = 80 max)
 
 3. **Long-term:**
    - Optimize slow queries (see Performance Baselines)
@@ -154,7 +154,7 @@ WHERE usename = 'ops_agent_app'
 **Symptoms:**
 - Investigations taking > 90 seconds (LLM timeout is 30s with bounded retries)
 - Errors: `httpx.HTTPStatusError`, `TimeoutError`
-- Metrics: `ops_agent_dependency_failures_total{dependency_type="llm"}`
+- Metrics: `ops_agent_dependency_failures_total{dependency="llm"}`
 
 **Diagnosis:**
 ```bash
@@ -209,10 +209,10 @@ grep "LLM" /var/log/ops-agent/app.log | grep -i "error\|timeout" | tail -20
 ```bash
 # View recent traces in Jaeger
 # http://localhost:16686
-# Look for slow spans in investigation pipeline
+# Look for slow spans in investigation graph
 
-# Check which stage is slow
-grep "pipeline_stage" /var/log/ops-agent/app.log | grep "duration_ms" | tail -50
+# Check which tool is slow
+grep "Tool executed successfully" /var/log/ops-agent/app.log | tail -50
 
 # Check vector search latency
 grep "similarity_search" /var/log/ops-agent/app.log | grep "duration_ms" | tail -20
@@ -247,8 +247,8 @@ LIMIT 10;
    - Verify explanation builder is not hitting rate limits
 
 **Prevention:**
-- Monitor each pipeline stage latency separately
-- Set up alerts for each stage exceeding baseline
+- Monitor each tool execution latency separately
+- Set up alerts for each tool exceeding baseline
 - Regular performance reviews (weekly)
 
 ---
@@ -463,11 +463,11 @@ These are emergency rollback controls, not steady-state defaults. Restore defaul
 1. **Investigation Latency**
    - `ops_agent_investigation_latency_seconds` P95 < 500ms (fallback path target)
    - `ops_agent_investigation_latency_seconds{mode="llm"}` P95 < 90s
-   - Alert if P95 > 2× baseline for 15 minutes
+   - Alert if P95 > 2x baseline for 15 minutes
 
 2. **Error Rates**
-   - `ops_agent_dependency_failures_total{dependency_type="database"}` < 1%
-   - `ops_agent_dependency_failures_total{dependency_type="llm"}` < 5%
+   - `ops_agent_dependency_failures_total{dependency="database"}` < 1%
+   - `ops_agent_dependency_failures_total{dependency="llm"}` < 5%
    - Alert if error ratio > 2% for 10 minutes
 
 3. **Connection Pool**
@@ -486,7 +486,7 @@ These are emergency rollback controls, not steady-state defaults. Restore defaul
 
 | Metric | Warning | Critical | Duration |
 |--------|---------|----------|----------|
-| Investigation P95 latency | 2× baseline | 5× baseline | 15 min |
+| Investigation P95 latency | 2x baseline | 5x baseline | 15 min |
 | 5xx error ratio | 2% | 5% | 10 min |
 | 4xx error ratio | 5% | 10% | 15 min |
 | Connection pool utilization | 80% | 95% | 5 min |

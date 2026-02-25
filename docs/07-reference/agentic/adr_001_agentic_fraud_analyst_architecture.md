@@ -1,7 +1,8 @@
 # ADR-001: Migration to True Agentic Architecture for Card Fraud Ops Analyst Agent
 
-**Status:** Proposed\
+**Status:** Accepted\
 **Date:** 2026-02-19\
+**Implemented:** 2026-02-23\
 **Author:** Fraud Platform Engineering\
 **Decision Type:** Architectural Decision Record (ADR)
 
@@ -9,7 +10,7 @@
 
 # 1. Context
 
-The current Card Fraud Ops Analyst Agent is implemented as a deterministic multi-stage pipeline consisting of:
+At the time this ADR was authored (2026-02-19), the Card Fraud Ops Analyst Agent was a deterministic multi-stage pipeline consisting of:
 
 - context\_builder
 - pattern\_engine
@@ -19,9 +20,9 @@ The current Card Fraud Ops Analyst Agent is implemented as a deterministic multi
 - rule\_draft\_engine
 - audit\_engine
 
-This pipeline provides structured fraud investigation assistance using LLM reasoning and deterministic fraud analysis tools.
+That pipeline provided structured fraud investigation assistance using LLM reasoning and deterministic fraud analysis tools.
 
-However, the current system is **not a true autonomous agentic system**, because:
+However, the system at that time was **not a true autonomous agentic system**, because:
 
 - Execution flow is static and pre-defined
 - No dynamic planning capability
@@ -30,20 +31,22 @@ However, the current system is **not a true autonomous agentic system**, because
 - No persistent investigation state
 - No adaptive reasoning
 
-This limits the system’s ability to:
+This limited the system's ability to:
 
 - Adapt investigation based on intermediate findings
 - Dynamically select relevant analysis tools
 - Improve investigation quality autonomously
 - Scale investigation complexity without code changes
 
-Fraud investigation is inherently stateful, non-linear, and evidence-driven. Therefore, an agentic architecture is required.
+Fraud investigation is inherently stateful, non-linear, and evidence-driven. Therefore, an agentic architecture was required.
+
+This migration is now complete. The production runtime uses LangGraph with planner, executor, completion, and tool nodes with persisted state and full tool I/O audit trails.
 
 ---
 
 # 2. Problem Statement
 
-The current pipeline architecture cannot support:
+The prior pipeline architecture could not support:
 
 - Autonomous investigation planning
 - Dynamic tool orchestration
@@ -52,15 +55,15 @@ The current pipeline architecture cannot support:
 - Persistent investigation memory
 - Controlled autonomous execution
 
-This prevents the system from evolving into a fully autonomous fraud investigation agent.
+This prevented the system from evolving into a fully autonomous fraud investigation agent.
 
 ---
 
 # 3. Decision
 
-We will migrate the existing pipeline into a **stateful agentic architecture using LangGraph as the orchestration engine**.
+This ADR approved migration from the deterministic pipeline to a **stateful agentic architecture using LangGraph as the orchestration engine**.
 
-The new architecture will introduce:
+The implemented architecture introduced:
 
 - Planner
 - Tool abstraction layer
@@ -69,9 +72,9 @@ The new architecture will introduce:
 - Graph-based orchestration
 - Deterministic autonomy with bounded execution
 
-LangGraph will be used as the orchestration runtime.
+LangGraph is the orchestration runtime.
 
-LangSmith will NOT be used. Observability will be implemented using OpenTelemetry and PostgreSQL.
+LangSmith is not used. Observability is implemented using OpenTelemetry and PostgreSQL.
 
 ---
 
@@ -114,19 +117,19 @@ Safety and auditability remain primary constraints.
 
 # 6. Architecture Overview
 
-## Current Architecture
+## Architecture at ADR Time
 
 Linear pipeline:
 
-context → similarity → pattern → reasoning → recommendation → rule draft
+context -> similarity -> pattern -> reasoning -> recommendation -> rule draft
 
-## Target Architecture
+## Implemented Architecture
 
 Stateful agent graph:
 
-Planner → Tool → State Update → Planner → Tool → State Update → Recommendation
+Planner -> Tool -> State Update -> Planner -> Tool -> State Update -> Recommendation
 
-Graph-based execution replaces static pipeline.
+Graph-based execution has replaced the static pipeline.
 
 ---
 
@@ -290,7 +293,7 @@ Jaeger will visualize traces.
 
 Grafana will monitor metrics.
 
-LangSmith will NOT be used.
+LangSmith is not used.
 
 ---
 
@@ -378,7 +381,7 @@ Estimated effort: 5 days
 
 ---
 
-Total Estimated Effort: 2–3 weeks
+Total Estimated Effort: 2-3 weeks
 
 ---
 
@@ -457,11 +460,11 @@ Mitigation: transactional persistence
 
 # 17. Final Decision
 
-We will migrate to a LangGraph-based stateful agentic architecture while maintaining deterministic execution, auditability, and human oversight.
+Migration to a LangGraph-based stateful agentic architecture has been completed while maintaining deterministic execution, auditability, and human oversight.
 
 ---
 
-# 18. Repository Structure (Target)
+# 18. Repository Structure (Target at ADR Authoring Time)
 
 The following production-ready repository structure is recommended:
 
@@ -699,7 +702,7 @@ This separation improves maintainability and clarity.
 
 # 23. Final Outcome
 
-Result will be a true autonomous fraud investigation agent with:
+Result is a true autonomous fraud investigation agent with:
 
 - Dynamic planning
 - Stateful execution

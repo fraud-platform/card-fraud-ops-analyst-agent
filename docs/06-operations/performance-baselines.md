@@ -13,7 +13,7 @@ This document establishes performance baselines for the Card Fraud Ops Analyst A
 | GET /worklist/recommendations | < 20ms | < 50ms | 100ms |
 | POST /worklist/recommendations/{id}/acknowledge | < 20ms | < 40ms | 100ms |
 
-## Pipeline Stage Latency Breakdown
+## Agent Tool Latency Breakdown
 
 ### 1. Context Build Stage
 
@@ -365,7 +365,7 @@ LIMIT $1 OFFSET $2;
 |--------|---------|----------|----------|
 | Fallback path P95 | > 1s | > 2s | 15 min |
 | LLM P95 | > 120s | > 180s | 15 min |
-| Any stage P95 | > 2× baseline | > 5× baseline | 15 min |
+| Any tool P95 | > 2x baseline | > 5x baseline | 15 min |
 
 ### Error Rate Alerts
 
@@ -439,32 +439,34 @@ uv run pytest tests/ --html=htmlcov/performance.html --self-contained-html
 
 ### Key Metrics to Track
 
-1. **Pipeline Stage Latency**: `ops_agent_pipeline_stage_duration_seconds{stage}`
+1. **Tool Execution Latency**: `ops_agent_tool_execution_latency_seconds{tool_name,status}`
 2. **Investigation Latency**: `ops_agent_investigation_latency_seconds{mode}`
-3. **Database Query Latency**: `ops_agent_db_query_duration_seconds{query_name}`
-4. **LLM Request Latency**: `ops_agent_llm_request_duration_seconds{provider}`
-5. **Connection Pool Utilization**: `ops_agent_db_pool_utilization`
-6. **Error Rates**: `ops_agent_errors_total{error_type, dependency}`
+3. **Database Query Latency**: `ops_agent_db_query_latency_seconds{query_name}`
+4. **LLM Latency**: `ops_agent_llm_latency_seconds{purpose}`
+5. **Dependency Health**: `ops_agent_dependency_health{dependency}`
+6. **Error Rates**: `ops_agent_dependency_failures_total{dependency}`, `ops_agent_db_query_failures_total{query_name}`, `ops_agent_llm_calls_total{purpose,status}`
 
 ### Dashboards
 
 **Recommended Grafana Dashboards**:
 1. Ops Agent Overview (investigation rate, latency, errors)
-2. Pipeline Performance (per-stage breakdown)
-3. Database Performance (query latency, pool utilization)
-4. LLM Performance (request latency, failure rate, token usage)
+2. Tool Execution Performance (per-tool latency and failure rates)
+3. Database Performance (query latency and failures)
+4. LLM Performance (planner/reasoning latency, failure rate, token usage)
 5. Business Metrics (recommendation queue, acknowledgment rate)
 
 ### Traces
 
 **Key Spans to Trace**:
-- `POST /investigations/run` (root span)
-  - `context_builder.build_context`
-  - `pattern_engine.analyze_patterns`
-  - `similarity_engine.find_similar_transactions`
-  - `reasoning_engine.generate_narrative`
-  - `recommendation_engine.generate_recommendations`
-  - `database.insert_investigation`
+- `investigation.run` (root span)
+  - `agent.planner`
+  - `agent.tool.context_tool`
+  - `agent.tool.pattern_tool`
+  - `agent.tool.similarity_tool`
+  - `agent.tool.reasoning_tool`
+  - `agent.tool.recommendation_tool`
+  - `agent.tool.rule_draft_tool` (conditional)
+  - `agent.completion`
 
 **View Traces**: http://localhost:16686 (Jaeger UI)
 

@@ -10,7 +10,7 @@ The Ops Analyst Agent is part of the **card-fraud-platform**. All observability 
 
 | Purpose | URL | What You'll See |
 |---------|-----|-----------------|
-| **Traces** | http://localhost:16686 | Jaeger UI - Request traces, pipeline stages, latencies |
+| **Traces** | http://localhost:16686 | Jaeger UI - Investigation traces, agent nodes, tool latencies |
 | **Metrics** | http://localhost:9090 | Prometheus UI - Query metrics, view targets |
 | **Dashboards** | http://localhost:3000 | Grafana UI - Pre-built dashboards (admin/admin) |
 | **Metrics Endpoint** | http://localhost:8003/api/v1/metrics | Raw Prometheus metrics from Ops Agent (requires `X-Metrics-Token`) |
@@ -94,12 +94,12 @@ Access control: `/api/v1/metrics` requires `X-Metrics-Token` and validates again
 | Metric Name | Type | Labels | Purpose |
 |-------------|------|--------|---------|
 | `ops_agent_investigation_requests_total` | Counter | `mode`, `status` | Total investigation requests |
-| `ops_agent_investigation_latency_seconds` | Histogram | `mode` | End-to-end latency |
-| `ops_agent_pipeline_stage_latency_seconds` | Histogram | `stage` | Per-stage latency |
-| `ops_agent_recommendations_generated_total` | Counter | `type`, `severity` | Recommendations created |
-| `ops_agent_llm_calls_total` | Counter | `status` | LLM API calls |
-| `ops_agent_llm_latency_seconds` | Histogram | - | LLM response time |
-| `ops_agent_llm_tokens_total` | Counter | `type` | Token consumption |
+| `ops_agent_investigation_latency_seconds` | Histogram | `mode` | End-to-end investigation latency |
+| `ops_agent_tool_execution_latency_seconds` | Histogram | `tool_name`, `status` | Per-tool latency |
+| `ops_agent_tool_execution_total` | Counter | `tool_name`, `status` | Per-tool execution count and failures |
+| `ops_agent_llm_calls_total` | Counter | `purpose`, `status` | Planner/reasoning LLM outcomes |
+| `ops_agent_llm_latency_seconds` | Histogram | `purpose` | LLM response time |
+| `ops_agent_db_query_latency_seconds` | Histogram | `query_name` | Database query latency |
 | `ops_agent_dependency_failures_total` | Counter | `dependency` | External service failures |
 
 **Query Examples (PromQL):**
@@ -114,9 +114,9 @@ histogram_quantile(0.95,
   rate(ops_agent_investigation_latency_seconds_bucket[5m])
 )
 
-# LLM error rate
-rate(ops_agent_llm_calls_total{status="error"}[5m]) /
-rate(ops_agent_llm_calls_total[5m])
+# LLM error rate for reasoning path
+rate(ops_agent_llm_calls_total{purpose="reasoning",status=~"error|timeout|parse_error|blocked_by_guard"}[5m]) /
+rate(ops_agent_llm_calls_total{purpose="reasoning"}[5m])
 ```
 
 ---
@@ -137,6 +137,7 @@ This returns a LangSmith-like experience with:
 - Investigation steps and timeline
 - Planner decisions
 - Tool executions
+- Tool `input_summary` and `output_summary` per step
 - LLM prompts and responses
 - Evidence and recommendations
 - All data embedded in HTML (no external dependencies)
@@ -174,28 +175,29 @@ If you see no traces in Jaeger, check:
 **What You'll See in Traces:**
 
 ```
-├── investigation.run (root span - total duration)
-│   ├── context_build (fetch transaction data)
-│   ├── pattern_analysis (fraud pattern detection)
-│   ├── similarity_analysis (vector search)
-│   ├── llm_reasoning (LLM reasoning span)
-│   │   ├── llm.request (LLM prompt sent)
-│   │   ├── llm.http_request (actual HTTP call to Ollama)
-│   │   └── llm.response (LLM response received)
-│   └── recommendations (generate recommendations)
+investigation.run
+  agent.planner
+  agent.tool.context_tool
+  agent.tool.pattern_tool
+  agent.tool.similarity_tool
+  agent.tool.reasoning_tool
+    llm.request (span event)
+    llm.response (span event)
+  agent.tool.recommendation_tool
+  agent.tool.rule_draft_tool (conditional)
+  agent.completion
 ```
 
 **Jaeger Enrichment:**
 
 The trace includes additional context attributes:
-- `run.id` - Investigation run ID
-- `run.mode` - `agentic`
-- `transaction.id` - Transaction being investigated
-- `pattern.severity` - `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`
-- `llm.latency_ms` - LLM response time in milliseconds
-- `llm.model` - Model used (e.g., `ollama/gpt-oss:20b`)
-- `llm.prompt_tokens` - Number of prompt tokens
-- `llm.completion_tokens` - Number of completion tokens
+- `investigation_id` - Investigation run ID
+- `transaction_id` - Transaction being investigated
+- `mode` - Runtime mode
+- `selected_tool` - Planner-selected next tool
+- `execution_time_ms` - Tool execution time in milliseconds
+- `status` - Per-node status (`SUCCESS`, `FAILED`, `TIMED_OUT`, etc.)
+- `severity` - Investigation severity (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`)
 
 ---
 
@@ -214,12 +216,11 @@ The trace includes additional context attributes:
 
 ```
 Portal (X-Request-ID: abc-123)
-  ↓
-Ops Agent (X-Request-ID: abc-123)
-  ├── logs: {"request_id": "abc-123", ...}
-  ├── → Rule Management (X-Request-ID: abc-123)
-  ├── → Ollama LLM (X-Request-ID: abc-123)
-  └── → Ollama Embeddings (X-Request-ID: abc-123)
+  -> Ops Agent (X-Request-ID: abc-123)
+     -> logs: {"request_id": "abc-123", ...}
+     -> Rule Management (X-Request-ID: abc-123)
+     -> Ollama LLM (X-Request-ID: abc-123)
+     -> Ollama Embeddings (X-Request-ID: abc-123)
 ```
 
 **Checking Request ID Propagation:**
@@ -266,8 +267,8 @@ Jaeger validation:
 1. Open http://localhost:16686
 2. Select service `card-fraud-ops-analyst-agent`
 3. Search recent traces for operation `investigation.run` or `POST /api/v1/ops-agent/investigations/run`
-4. Confirm stage spans exist (`context_build`, `pattern_analysis`, `similarity_analysis`, `llm_reasoning`, `recommendations`)
-5. Confirm span attributes include `run.id` and `transaction.id`
+4. Confirm spans exist (`agent.planner`, `agent.tool.*`, `agent.completion`)
+5. Confirm span attributes include `investigation_id` and `transaction_id`
 
 ---
 
@@ -281,9 +282,9 @@ Jaeger validation:
 # Find your trace, look for slow spans
 ```
 
-**Step 2: Check per-stage metrics**
+**Step 2: Check per-tool metrics**
 ```bash
-curl -H "X-Metrics-Token: $METRICS_TOKEN" http://localhost:8003/api/v1/metrics | grep pipeline_stage_latency
+curl -H "X-Metrics-Token: $METRICS_TOKEN" http://localhost:8003/api/v1/metrics | grep ops_agent_tool_execution_latency_seconds
 ```
 
 **Step 3: Check logs for errors**
@@ -292,9 +293,9 @@ docker logs ops-agent | grep ERROR
 ```
 
 **Step 4: Identify the bottleneck**
-- `context_build` > 100ms → Check TM API response time
-- `similarity_analysis` > 200ms → Check vector search query
-- `llm_reasoning` > 30s → LLM provider slow, consider fallback
+- `agent.tool.context_tool` > 100ms -> Check TM API response time
+- `agent.tool.similarity_tool` > 200ms -> Check embedding/vector query performance
+- `agent.tool.reasoning_tool` > 30s -> LLM provider slow, consider fallback
 
 ---
 
@@ -374,7 +375,7 @@ services:
 
 **View logs in Grafana:**
 1. Open http://localhost:3000
-2. Explore → Loki
+2. Explore -> Loki
 3. Query: `{job="ops-agent"} |= "error"`
 
 ### Option 2: ELK Stack (Elasticsearch, Logstash, Kibana)
@@ -399,8 +400,8 @@ services:
 
 **View logs in Kibana:**
 1. Open http://localhost:5601
-2. Stack Management → Index Patterns → Create `logs-*`
-3. Discover → Filter by `request_id`
+2. Stack Management -> Index Patterns -> Create `logs-*`
+3. Discover -> Filter by `request_id`
 
 ### Option 3: CloudWatch (AWS)
 
@@ -411,7 +412,7 @@ AWS_REGION=us-east-1
 ```
 
 **View logs:**
-1. CloudWatch Logs → Log groups → `/aws/ecs/ops-agent`
+1. CloudWatch Logs -> Log groups -> `/aws/ecs/ops-agent`
 2. Search logs by `request_id`
 
 ---
@@ -452,7 +453,7 @@ groups:
 - [ ] Verify OTLP endpoint: `doppler secrets get OTEL_OTLP_ENDPOINT`
 - [ ] Check feature flags: `doppler secrets | grep OPS_AGENT_ENABLE`
 - [ ] Check database connectivity: `psql $DATABASE_URL_APP -c "SELECT 1"`
-- [ ] Check LLM provider: `curl $LLM_BASE_URL/v1/models`
+- [ ] Check LLM provider: `curl -H "Authorization: Bearer $LLM_API_KEY" "$LLM_BASE_URL/api/tags"`
 
 ---
 
