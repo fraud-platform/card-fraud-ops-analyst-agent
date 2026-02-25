@@ -1,7 +1,7 @@
 [project]
 name = "card-fraud-ops-analyst-agent"
 version = "0.1.0"
-description = "Autonomous fraud analyst assistant with deterministic evidence pipeline"
+description = "LangGraph-based agentic fraud investigation assistant for card fraud operations"
 readme = "README.md"
 requires-python = ">=3.14"  # uuid.uuid7 available in stdlib
 authors = [
@@ -25,7 +25,9 @@ dependencies = [
     "httpx>=0.27.0",
     "orjson>=3.10.0",
     "tenacity>=8.2.0",
-    "litellm>=1.78.0,<2.0",
+    "langgraph>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langchain-ollama>=0.3.0",
 ]
 
 [project.optional-dependencies]

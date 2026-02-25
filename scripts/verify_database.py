@@ -7,13 +7,17 @@ import sys
 
 logger = logging.getLogger(__name__)
 
+# Agentic architecture tables
 OPS_AGENT_TABLES = [
-    "ops_agent_runs",
+    "ops_agent_investigations",
+    "ops_agent_investigation_state",
+    "ops_agent_tool_execution_log",
     "ops_agent_insights",
     "ops_agent_evidence",
     "ops_agent_recommendations",
     "ops_agent_rule_drafts",
     "ops_agent_audit_log",
+    "ops_agent_transaction_embeddings",
 ]
 
 
@@ -60,24 +64,17 @@ async def verify() -> None:
         )
         existing_tables = {row[0] for row in result.fetchall()}
 
-        if vector_enabled:
-            if not vector_installed:
-                logger.error(
-                    "VECTOR_ENABLED=true but pgvector extension is not installed in this database. "
-                    "Use a Postgres instance with pgvector available (e.g., platform DB updated to include pgvector)."
-                )
-                sys.exit(1)
-            ops_agent_tables_to_check = [
-                "ops_agent_transaction_embeddings",
-                *OPS_AGENT_TABLES,
-            ]
-        else:
-            ops_agent_tables_to_check = OPS_AGENT_TABLES
+        if vector_enabled and not vector_installed:
+            logger.error(
+                "VECTOR_ENABLED=true but pgvector extension is not installed in this database. "
+                "Use a Postgres instance with pgvector available."
+            )
+            sys.exit(1)
 
     await engine.dispose()
 
     missing = []
-    for table in ops_agent_tables_to_check:
+    for table in OPS_AGENT_TABLES:
         if table in existing_tables:
             logger.info(f"  OK: {table}")
         else:

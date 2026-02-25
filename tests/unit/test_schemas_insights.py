@@ -27,7 +27,7 @@ def test_insight_detail():
         severity="HIGH",
         summary="Test insight",
         insight_type="fraud_analysis",
-        model_mode="deterministic",
+        model_mode="agentic",
         generated_at=datetime.now(),
     )
     assert detail.insight_id == "ins-123"

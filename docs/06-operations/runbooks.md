@@ -6,7 +6,7 @@ This document provides step-by-step procedures for common operational scenarios.
 
 | Scenario | Severity | First Action | Escalation |
 |----------|----------|--------------|------------|
-| Investigation pipeline failure | SEV2 | Check feature flags, enable deterministic mode | Platform team |
+| Investigation pipeline failure | SEV2 | Check feature flags, enable fallback mode | Platform team |
 | Database connection exhaustion | SEV2 | Check pool metrics, restart workers if needed | DBA team |
 | LLM service degradation | SEV3 | Enable fallback mode, check provider status | LLM provider |
 | High latency investigations | SEV3 | Review traces, check vector search | N/A |
@@ -47,7 +47,7 @@ Default platform posture:
 grep "ERROR" /var/log/ops-agent/app.log | tail -50
 
 # Verify feature flags
-doppler secrets get OPS_AGENT_ENABLE_DETERMINISTIC_PIPELINE
+# Agentic runtime feature flags
 doppler secrets get OPS_AGENT_ENABLE_LLM_REASONING
 
 # Check database connectivity
@@ -62,7 +62,7 @@ jaeger: http://localhost:16686
 
 1. **If LLM reasoning is failing (temporary mitigation only):**
    ```bash
-   # Disable LLM reasoning, fall back to deterministic mode
+   # Disable LLM reasoning, fall back to evidence-only mode
    doppler secrets set OPS_AGENT_ENABLE_LLM_REASONING=false
    # Restart service for settings to take effect
    kubectl rollout restart deployment/ops-agent
@@ -152,8 +152,8 @@ WHERE usename = 'ops_agent_app'
 ### 3. LLM Service Degradation
 
 **Symptoms:**
-- Investigations taking > 90 seconds (LLM timeout is 30s with 3 retries)
-- Errors: `litellm.exceptions.APIError`, `TimeoutError`
+- Investigations taking > 90 seconds (LLM timeout is 30s with bounded retries)
+- Errors: `httpx.HTTPStatusError`, `TimeoutError`
 - Metrics: `ops_agent_dependency_failures_total{dependency_type="llm"}`
 
 **Diagnosis:**
@@ -162,7 +162,9 @@ WHERE usename = 'ops_agent_app'
 doppler secrets get LLM_PROVIDER
 
 # Test provider connectivity
-curl -X POST $LLM_BASE_URL/v1/models
+printf "Authorization: Bearer %s\n" "$LLM_API_KEY" > /tmp/ops_agent_llm_header
+curl -H @/tmp/ops_agent_llm_header "$LLM_BASE_URL/api/tags"
+rm -f /tmp/ops_agent_llm_header
 
 # View LLM error logs
 grep "LLM" /var/log/ops-agent/app.log | grep -i "error\|timeout" | tail -20
@@ -170,38 +172,36 @@ grep "LLM" /var/log/ops-agent/app.log | grep -i "error\|timeout" | tail -20
 
 **Resolution Actions:**
 
-1. **Enable deterministic fallback:**
+1. **Enable fallback mode:**
    ```bash
    doppler secrets set OPS_AGENT_ENABLE_LLM_REASONING=false
    kubectl rollout restart deployment/ops-agent
-   # Service will use deterministic mode (no LLM calls)
+   # Service will use evidence-only fallback mode (no LLM calls)
    ```
 
-2. **If using Ollama, check local service:**
+2. **Validate Ollama endpoint connectivity:**
    ```bash
-   docker ps | grep ollama
-   docker logs ollama-container --tail 50
-   # Restart Ollama if needed
-   docker restart ollama-container
+   printf "Authorization: Bearer %s\n" "$LLM_API_KEY" > /tmp/ops_agent_llm_header
+   curl -H @/tmp/ops_agent_llm_header "$LLM_BASE_URL/api/tags"
+   rm -f /tmp/ops_agent_llm_header
    ```
 
-3. **If using cloud provider (Anthropic, OpenAI):**
-   - Check provider status page
-   - Verify API key is valid
-   - Check rate limits (tokens per minute)
+3. **If authentication fails:**
+   - Verify `LLM_API_KEY` is set and valid
+   - Verify `LLM_PROVIDER` uses `ollama/...` or `ollama_chat/...`
+   - Verify `LLM_BASE_URL` points to Ollama Cloud, not localhost
 
 **Prevention:**
-- Always set `LLM_FALLBACK_MODEL` to a reliable provider
 - Monitor `ops_agent_investigation_latency_seconds{mode="llm"}`
 - Set up alert for P95 > 60s for 15 minutes
-- Use deterministic mode for critical operations
+- Use fallback mode for critical operations
 
 ---
 
 ### 4. High Latency Investigations
 
 **Symptoms:**
-- `POST /investigations/run` taking > 2 seconds (deterministic) or > 90s (LLM)
+- `POST /investigations/run` taking > 2 seconds (fallback path) or > 90s (LLM)
 - Analyst complaints about slow investigations
 - Metrics: `ops_agent_investigation_latency_seconds` P95 above baseline
 
@@ -240,7 +240,7 @@ LIMIT 10;
 3. **If LLM reasoning is slow (> 60s):**
    - Check LLM provider response time
    - Consider smaller prompt (`LLM_MAX_PROMPT_TOKENS`)
-   - Enable deterministic fallback
+   - Enable fallback mode
 
 4. **If recommendation generation is slow (> 100ms):**
    - Check conflict matrix computation (if enabled)
@@ -256,7 +256,7 @@ LIMIT 10;
 ### 5. Investigation Not Found (404)
 
 **Symptoms:**
-- `GET /api/v1/ops-agent/investigations/{run_id}` returns 404
+- `GET /api/v1/ops-agent/investigations/{investigation_id}` returns 404
 - Error: "Investigation not found"
 
 **Diagnosis:**
@@ -316,8 +316,15 @@ grep "409" /var/log/ops-agent/app.log | tail -20
 1. **Use existing investigation:**
    ```bash
    # Get existing run_id from 409 response
-   curl -H "Authorization: Bearer $TOKEN" \
-     https://api.example.com/api/v1/ops-agent/investigations/$EXISTING_RUN_ID
+   # Avoid placing raw bearer tokens directly in command-line arguments
+   AUTH_HEADER_FILE="$(mktemp)"
+   chmod 600 "$AUTH_HEADER_FILE"
+   trap 'rm -f "$AUTH_HEADER_FILE"' EXIT
+   printf "Authorization: Bearer %s\n" "$TOKEN" > "$AUTH_HEADER_FILE"
+   curl -H @"$AUTH_HEADER_FILE" \
+     "https://api.example.com/api/v1/ops-agent/investigations/$EXISTING_RUN_ID"
+   rm -f "$AUTH_HEADER_FILE"
+   trap - EXIT
    ```
 
 2. **If re-investigation is needed:**
@@ -454,7 +461,7 @@ These are emergency rollback controls, not steady-state defaults. Restore defaul
 ### Key Metrics to Watch
 
 1. **Investigation Latency**
-   - `ops_agent_investigation_latency_seconds{mode="deterministic"}` P95 < 500ms
+   - `ops_agent_investigation_latency_seconds` P95 < 500ms (fallback path target)
    - `ops_agent_investigation_latency_seconds{mode="llm"}` P95 < 90s
    - Alert if P95 > 2× baseline for 15 minutes
 

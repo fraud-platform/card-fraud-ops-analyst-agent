@@ -1,189 +1,134 @@
-"""LLM provider abstraction.
+"""Ollama Cloud chat model adapter used by planner and reasoning stages.
 
-This project supports two LLM execution backends:
-- Native Ollama HTTP API (local or https://ollama.com Cloud API)
-- LiteLLM (kept for compatibility with non-Ollama providers)
+This module intentionally supports a single provider path:
+- Ollama Cloud for planner/reasoning chat completions.
+
+Embeddings remain independently configured via VECTOR_* settings.
 """
 
-from abc import ABC, abstractmethod
+from __future__ import annotations
+
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
+import structlog
+from langchain_core.messages import AIMessage, BaseMessage
 
-from app.core.config import LLMConfig, Settings, get_settings
+from app.core.config import Settings, get_settings
 from app.core.tracing import get_tracing_headers
 
+logger = structlog.get_logger(__name__)
 
-@dataclass
-class LLMResponse:
-    """Structured LLM response."""
+# Max retries on empty-content responses (gpt-oss thinking model intermittently
+# returns empty content under concurrent load).
+_MAX_CONTENT_RETRIES = 3
+_RETRY_DELAY_SECONDS = 1.0
 
-    content: str
-    model: str
-    usage: dict[str, int]
-    latency_ms: float
-
-
-class LLMProvider(ABC):
-    """Abstract LLM provider interface."""
-
-    @abstractmethod
-    async def complete(
-        self,
-        messages: list[dict[str, str]],
-        **kwargs: Any,
-    ) -> LLMResponse:
-        """Generate a completion response.
-
-        Args:
-            messages: List of message dicts with 'role' and 'content'
-            **kwargs: Additional provider-specific parameters
-
-        Returns:
-            LLMResponse with content, model, usage, and latency
-        """
-        ...
+# Max retries on transient HTTP errors (429, 502, 503, 504).
+_MAX_HTTP_RETRIES = 3
+_HTTP_RETRY_BACKOFF_BASE = 2.0  # exponential: 2s, 4s, 8s
+_RETRYABLE_STATUS_CODES = frozenset({429, 502, 503, 504})
 
 
-class LiteLLMProvider(LLMProvider):
-    """LiteLLM wrapper for provider-agnostic LLM calls."""
-
-    def __init__(self, config: LLMConfig):
-        self.config = config
-        # Lazy import so we can operate in Ollama-only mode.
-        import litellm  # type: ignore[import-untyped]
-
-        self._litellm = litellm
-        self._litellm.drop_params = True
-        self._litellm.set_verbose = False
-
-    async def complete(
-        self,
-        messages: list[dict[str, str]],
-        json_mode: bool = False,
-        **kwargs: Any,
-    ) -> LLMResponse:
-        """Generate completion using LiteLLM.
-
-        Args:
-            messages: List of message dicts
-            json_mode: If True, request JSON response (for Ollama: format="json")
-            **kwargs: Additional parameters
-
-        Returns:
-            LLMResponse with structured response data
-        """
-        import time
-
-        start_time = time.perf_counter()
-
-        model = kwargs.pop("model", self.config.provider)
-        temperature = kwargs.pop("temperature", 0.1)
-        max_tokens = kwargs.pop("max_tokens", self.config.max_completion_tokens)
-        timeout = kwargs.pop("timeout", self.config.timeout)
-        num_retries = kwargs.pop("num_retries", self.config.max_retries)
-
-        call_kwargs: dict[str, Any] = {}
-        if self.config.base_url:
-            call_kwargs["api_base"] = self.config.base_url
-        if self.config.api_key.get_secret_value():
-            call_kwargs["api_key"] = self.config.api_key.get_secret_value()
-        tracing_headers = get_tracing_headers()
-        if tracing_headers:
-            call_kwargs["extra_headers"] = tracing_headers
-
-        # Ollama JSON mode: requires format="json" parameter
-        # See: https://docs.litellm.ai/docs/providers/ollama
-        if json_mode and model.startswith(("ollama/", "ollama_chat/")):
-            call_kwargs["format"] = "json"
-
-        response = await self._litellm.acompletion(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout=timeout,
-            num_retries=num_retries,
-            **call_kwargs,
-            **kwargs,
-        )
-
-        latency_ms = (time.perf_counter() - start_time) * 1000
-
-        content = response.choices[0].message.content or ""
-        usage = {
-            "prompt_tokens": response.usage.prompt_tokens,
-            "completion_tokens": response.usage.completion_tokens,
-            "total_tokens": response.usage.total_tokens,
-        }
-
-        return LLMResponse(
-            content=content,
-            model=response.model,
-            usage=usage,
-            latency_ms=latency_ms,
-        )
+def _extract_text_field(value: Any) -> str:
+    """Normalize provider text fields that may be string or structured list."""
+    if isinstance(value, str):
+        return value.strip()
+    if not isinstance(value, list):
+        return ""
+    parts: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            parts.append(item)
+            continue
+        if isinstance(item, dict):
+            text = item.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts).strip()
 
 
-def _ollama_model_name(provider: str) -> str:
-    # Allow both LiteLLM-style strings (ollama/..., ollama_chat/...) and raw
-    # Ollama model names (gpt-oss:120b-cloud).
+def _provider_to_model(provider: str) -> str:
     if provider.startswith(("ollama/", "ollama_chat/")):
         return provider.split("/", 1)[1]
     return provider
 
 
-def _ollama_api_base(base_url: str) -> str:
-    base = base_url.rstrip("/")
-    if base.endswith("/api"):
-        return base
-    return f"{base}/api"
+def _api_base(base_url: str) -> str:
+    normalized = base_url.strip().rstrip("/")
+    if normalized.endswith("/api"):
+        return normalized
+    return f"{normalized}/api"
 
 
-class OllamaProvider(LLMProvider):
-    """Native Ollama HTTP API provider.
+def _message_role(message: BaseMessage) -> str:
+    role = getattr(message, "type", "")
+    if role == "system":
+        return "system"
+    if role == "ai":
+        return "assistant"
+    return "user"
 
-    Works with both local Ollama (default host http://localhost:11434)
-    and Ollama Cloud API (host https://ollama.com with Bearer auth).
-    """
 
-    def __init__(self, config: LLMConfig):
-        self.config = config
+@dataclass(slots=True)
+class OllamaCloudChatModel:
+    """Minimal async chat model adapter exposing ``ainvoke``."""
 
-    async def complete(
+    model: str
+    base_url: str
+    timeout_seconds: int
+    api_key: str
+    default_temperature: float
+    default_max_tokens: int
+
+    async def _post_with_retries(
         self,
-        messages: list[dict[str, str]],
-        json_mode: bool = False,
-        **kwargs: Any,
-    ) -> LLMResponse:
-        import time
+        client: httpx.AsyncClient,
+        url: str,
+        payload: dict[str, Any],
+    ) -> httpx.Response:
+        """POST with exponential backoff on transient HTTP errors (429, 5xx)."""
+        last_exc: httpx.HTTPStatusError | None = None
+        for http_attempt in range(1, _MAX_HTTP_RETRIES + 1):
+            response = await client.post(url, json=payload)
+            if response.status_code not in _RETRYABLE_STATUS_CODES:
+                response.raise_for_status()
+                return response
+            last_exc = httpx.HTTPStatusError(
+                f"{response.status_code}",
+                request=response.request,
+                response=response,
+            )
+            delay = _HTTP_RETRY_BACKOFF_BASE**http_attempt
+            logger.warning(
+                "Ollama HTTP error; retrying with backoff",
+                status_code=response.status_code,
+                attempt=http_attempt,
+                max_retries=_MAX_HTTP_RETRIES,
+                backoff_seconds=delay,
+            )
+            await asyncio.sleep(delay)
+        # All retries exhausted — raise the last error
+        raise last_exc  # type: ignore[misc]
 
-        start_time = time.perf_counter()
+    async def ainvoke(self, messages: list[BaseMessage], **kwargs: Any) -> AIMessage:
+        temperature = float(kwargs.get("temperature", self.default_temperature))
+        max_tokens = int(kwargs.get("max_tokens", self.default_max_tokens))
+        json_mode = bool(kwargs.get("json_mode", True))
 
-        provider_model = kwargs.pop("model", self.config.provider)
-        model = _ollama_model_name(provider_model)
-
-        temperature = kwargs.pop("temperature", 0.1)
-        max_tokens = kwargs.pop("max_tokens", self.config.max_completion_tokens)
-        timeout_s = kwargs.pop("timeout", self.config.timeout)
-
-        host = (self.config.base_url or "http://localhost:11434").rstrip("/")
-        api_base = _ollama_api_base(host)
-        url = f"{api_base}/chat"
-
-        headers: dict[str, str] = {}
-
-        # Add distributed tracing headers for request correlation
-        headers.update(get_tracing_headers())
-
-        api_key = self.config.api_key.get_secret_value()
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        payload_messages = [
+            {
+                "role": _message_role(message),
+                "content": str(getattr(message, "content", "")),
+            }
+            for message in messages
+        ]
 
         payload: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
+            "model": self.model,
+            "messages": payload_messages,
             "stream": False,
             "options": {
                 "temperature": temperature,
@@ -193,52 +138,110 @@ class OllamaProvider(LLMProvider):
         if json_mode:
             payload["format"] = "json"
 
-        timeout = httpx.Timeout(float(timeout_s))
+        headers = {**get_tracing_headers()}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        timeout = httpx.Timeout(float(self.timeout_seconds))
+        data: dict[str, Any] = {}
+        content: str | None = None
+        fallback_thinking: str | None = None
+        fallback_response: str | None = None
+        message_keys: list[str] = []
+        url = f"{_api_base(self.base_url)}/chat"
         async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
-            data = response.json()
+            for attempt in range(1, _MAX_CONTENT_RETRIES + 1):
+                response = await self._post_with_retries(client, url, payload)
+                data = response.json()
 
-        latency_ms = (time.perf_counter() - start_time) * 1000
+                message_obj = data.get("message")
+                raw_content = message_obj.get("content") if isinstance(message_obj, dict) else None
+                raw_thinking = (
+                    message_obj.get("thinking") if isinstance(message_obj, dict) else None
+                )
+                content_text = _extract_text_field(raw_content)
+                thinking_text = _extract_text_field(raw_thinking)
+                response_text = _extract_text_field(data.get("response"))
 
-        message = data.get("message") or {}
-        content = message.get("content")
-        if not isinstance(content, str):
-            content = ""
+                if content_text:
+                    content = content_text
+                    break
+
+                if thinking_text:
+                    fallback_thinking = thinking_text
+                if response_text:
+                    fallback_response = response_text
+
+                if fallback_response:
+                    # Some providers return top-level `response` instead of message.content.
+                    content = fallback_response
+                    logger.warning(
+                        "Ollama returned empty message.content; using top-level response fallback",
+                        attempt=attempt,
+                        max_retries=_MAX_CONTENT_RETRIES,
+                    )
+                    break
+
+                if fallback_thinking and attempt == _MAX_CONTENT_RETRIES:
+                    # Final fallback: preserve thinking text rather than raising transport error.
+                    content = fallback_thinking
+                    logger.warning(
+                        "Ollama returned empty message.content; using message.thinking fallback",
+                        attempt=attempt,
+                        max_retries=_MAX_CONTENT_RETRIES,
+                        thinking_chars=len(fallback_thinking),
+                    )
+                    break
+
+                message_keys = sorted(message_obj.keys()) if isinstance(message_obj, dict) else []
+                logger.warning(
+                    "Ollama returned empty message.content",
+                    attempt=attempt,
+                    max_retries=_MAX_CONTENT_RETRIES,
+                    message_keys=message_keys,
+                    thinking_chars=len(str(message_obj.get("thinking", "")))
+                    if isinstance(message_obj, dict)
+                    else 0,
+                    top_level_keys=sorted(data.keys()) if isinstance(data, dict) else [],
+                )
+                if attempt < _MAX_CONTENT_RETRIES:
+                    await asyncio.sleep(_RETRY_DELAY_SECONDS)
+            else:
+                raise ValueError(
+                    f"Ollama empty message.content after {_MAX_CONTENT_RETRIES} attempts; "
+                    f"top_keys={sorted(data.keys())} message_keys={message_keys}"
+                )
+
+        content = str(content)
 
         prompt_tokens = int(data.get("prompt_eval_count") or 0)
         completion_tokens = int(data.get("eval_count") or 0)
-        usage = {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
+        usage_metadata = {
+            "input_tokens": prompt_tokens,
+            "output_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
         }
-
-        return LLMResponse(
+        response_metadata = {
+            "model": str(data.get("model") or self.model),
+            "done_reason": data.get("done_reason"),
+        }
+        return AIMessage(
             content=content,
-            model=str(data.get("model") or model),
-            usage=usage,
-            latency_ms=latency_ms,
+            usage_metadata=usage_metadata,
+            response_metadata=response_metadata,
         )
 
 
-def get_llm_provider(settings: Settings | None = None) -> LLMProvider:
-    """Factory function to create LLM provider.
-
-    Args:
-        settings: Application settings (defaults to get_settings())
-
-    Returns:
-        Configured LLMProvider instance
-    """
-    if settings is None:
-        settings = get_settings()
-
-    provider = settings.llm.provider
-    base_url = (settings.llm.base_url or "").lower()
-    is_ollama_host = "ollama.com" in base_url or "localhost:11434" in base_url
-
-    if is_ollama_host or provider.startswith(("ollama/", "ollama_chat/")):
-        return OllamaProvider(settings.llm)
-
-    return LiteLLMProvider(settings.llm)
+def get_chat_model(settings: Settings | None = None) -> OllamaCloudChatModel:
+    """Return the configured Ollama Cloud chat model adapter."""
+    active = settings or get_settings()
+    llm_config = active.llm
+    planner_config = active.planner
+    return OllamaCloudChatModel(
+        model=_provider_to_model(llm_config.provider),
+        base_url=llm_config.base_url,
+        timeout_seconds=llm_config.timeout,
+        api_key=llm_config.api_key.get_secret_value(),
+        default_temperature=planner_config.temperature,
+        default_max_tokens=llm_config.max_completion_tokens,
+    )

@@ -194,15 +194,18 @@ uv run pytest tests/unit -v
 # 6. Smoke tests pass (TestClient, no DB needed)
 uv run pytest tests/smoke -v
 
-# 7. Server starts
+# 7. Install git quality-gate hooks
+uv run pre-commit install --hook-type pre-commit --hook-type pre-push
+
+# 8. Server starts
 uv run doppler-local &
-curl http://localhost:8003/health
+curl http://localhost:8003/api/v1/health
 ```
 
 Expected health response:
 
 ```json
-{"status": "ok", "version": "0.1.0"}
+{"status": "ok"}
 ```
 
 ## Troubleshooting

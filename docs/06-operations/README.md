@@ -1,4 +1,4 @@
-ï»¿# 06-operations
+# 06-operations
 
 Operational controls, governance, observability, and incident procedures.
 
@@ -10,7 +10,7 @@ This section contains operational documentation for running the Card Fraud Ops A
 
 The service tracks the following key operational metrics:
 
-- **Investigation Latency**: P95 < 500ms (deterministic), < 90s (LLM)
+- **Investigation Latency**: P95 < 500ms (agentic fallback path), < 90s (LLM path)
 - **Error Rates**: < 2% (5xx), < 5% (4xx)
 - **Connection Pool Utilization**: < 80%
 - **Recommendation Queue Depth**: < 1000
@@ -76,7 +76,7 @@ GROUP BY priority;
 
 | Metric | Warning | Critical | Duration |
 |--------|---------|----------|----------|
-| Investigation P95 latency | 2Ã— baseline | 5Ã— baseline | 15 min |
+| Investigation P95 latency | 2× baseline | 5× baseline | 15 min |
 | 5xx error ratio | 2% | 5% | 10 min |
 | Connection pool utilization | 80% | 95% | 5 min |
 | LLM failure ratio | 10% | 25% | 15 min |

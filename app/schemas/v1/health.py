@@ -12,3 +12,4 @@ class ReadyResponse(BaseModel):
     database: bool = False
     dependencies: dict[str, bool] = Field(default_factory=dict)
     features: dict[str, bool] = Field(default_factory=dict)
+    embedding_service: bool | None = None

@@ -1,4 +1,4 @@
-"""Investigation schemas."""
+"""Investigation schemas for agentic API."""
 
 from datetime import datetime
 from typing import Any
@@ -6,26 +6,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.schemas.v1.common import (
-    RecommendationStatus,
-    RecommendationType,
-    RunMode,
-    RunStatus,
-    Severity,
-)
-
 
 class RunRequest(BaseModel):
-    mode: RunMode = RunMode.QUICK
     transaction_id: str = Field(..., min_length=1, description="Transaction UUID")
-    case_id: str | None = None
-    include_rule_draft_preview: bool = False
+    mode: str = "FULL"
 
-    # SECURITY: Validate UUID format to prevent injection/processing errors
     @field_validator("transaction_id")
     @classmethod
     def validate_transaction_id(cls, v: str) -> str:
-        """Validate transaction_id is a valid UUID format."""
         try:
             UUID(v)
         except ValueError as err:
@@ -33,103 +21,75 @@ class RunRequest(BaseModel):
         return v
 
 
-class InsightSummary(BaseModel):
-    insight_id: str
-    severity: Severity
-    summary: str
-    generated_at: datetime
+class InvestigationSummary(BaseModel):
+    investigation_id: str
+    transaction_id: str
+    status: str
+    severity: str
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
-class RecommendationPayload(BaseModel):
+class InvestigationListResponse(BaseModel):
+    investigations: list[InvestigationSummary]
+    total: int = 0
+
+
+class PlannerDecisionSchema(BaseModel):
+    step: int
+    selected_tool: str
+    reason: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    timestamp: str
+
+
+class ToolExecutionSchema(BaseModel):
+    tool_name: str
+    input_summary: dict[str, Any] = Field(default_factory=dict)
+    output_summary: dict[str, Any] = Field(default_factory=dict)
+    execution_time_ms: int
+    status: str
+    error_message: str | None = None
+    timestamp: str
+
+
+class RecommendationSchema(BaseModel):
+    type: str
+    priority: int = 0
     title: str
     impact: str
-    model_mode: str | None = None
-    llm_status: str | None = None
-    llm_narrative: str | None = None
-    llm_confidence: float | None = None
-    llm_risk_assessment: str | None = None
-    llm_error: str | None = None
-    llm_model: str | None = None
-    llm_latency_ms: float | None = None
-    llm_reasoning_hash: str | None = None
+    signature_hash: str | None = None
 
 
-class RecommendationDetail(BaseModel):
-    recommendation_id: str
-    type: RecommendationType
-    status: RecommendationStatus
-    priority: int = 0
-    payload: RecommendationPayload
-
-
-class ActionPlanItem(BaseModel):
-    priority: int = 3
-    action: str
-    rationale: str
-    evidence_ref: str | None = None
-    owner: str = "fraud_analyst"
-
-
-class AgenticTraceStage(BaseModel):
-    enabled: bool
+class InvestigationResponse(BaseModel):
+    investigation_id: str
+    transaction_id: str
     status: str
-    duration_ms: float | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    severity: str
+    confidence_score: float = Field(ge=0.0, le=1.0)
+    step_count: int
+    max_steps: int = 20
+    planner_decisions: list[PlannerDecisionSchema] = Field(default_factory=list)
+    tool_executions: list[ToolExecutionSchema] = Field(default_factory=list)
+    recommendations: list[RecommendationSchema] = Field(default_factory=list)
+    started_at: str
+    completed_at: str | None = None
+    total_duration_ms: int | None = None
 
 
-class AgenticTrace(BaseModel):
-    run_id: str
-    model_mode: str = "deterministic"
-    llm_status: str | None = None
-    llm_model: str | None = None
-    llm_error: str | None = None
-    llm_latency_ms: float | None = None
-    llm_reasoning_hash: str | None = None
-    stage_durations: dict[str, float] = Field(default_factory=dict)
-    stages: dict[str, AgenticTraceStage] = Field(default_factory=dict)
-    feature_flags: dict[str, bool] = Field(default_factory=dict)
-    safeguards: dict[str, bool] = Field(default_factory=dict)
+class InvestigationDetailResponse(InvestigationResponse):
+    context: dict[str, Any] = Field(default_factory=dict)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    pattern_results: dict[str, Any] = Field(default_factory=dict)
+    similarity_results: dict[str, Any] = Field(default_factory=dict)
+    reasoning: dict[str, Any] = Field(default_factory=dict)
+    hypotheses: list[str] = Field(default_factory=list)
+    rule_draft: dict[str, Any] | None = None
 
 
-class RunResponse(BaseModel):
-    run_id: str
-    status: RunStatus
-    mode: RunMode
-    transaction_id: str
-    model_mode: str = "deterministic"
-    llm_status: str | None = None
-    llm_error: str | None = None
-    llm_model: str | None = None
-    duration_ms: float | None = None
-    runtime_feature_flags: dict[str, bool] = Field(default_factory=dict)
-    runtime_safeguards: dict[str, bool] = Field(default_factory=dict)
-    agentic_trace: AgenticTrace | None = None
-    action_plan: list[ActionPlanItem] = Field(default_factory=list)
-    evidence_gaps: list[str] = Field(default_factory=list)
-    insight: InsightSummary | None = None
-    recommendations: list[RecommendationDetail] = Field(default_factory=list)
+class ResumeRequest(BaseModel):
+    pass
 
 
-class DetailResponse(BaseModel):
-    run_id: str
-    status: RunStatus
-    mode: RunMode
-    transaction_id: str
-    case_id: str | None = None
-    started_at: datetime
-    completed_at: datetime | None = None
-    error_summary: str | None = None
-    model_mode: str = "deterministic"
-    llm_status: str | None = None
-    llm_error: str | None = None
-    llm_model: str | None = None
-    duration_ms: float | None = None
-    stage_durations: dict[str, float] = Field(default_factory=dict)
-    runtime_feature_flags: dict[str, bool] = Field(default_factory=dict)
-    runtime_safeguards: dict[str, bool] = Field(default_factory=dict)
-    agentic_trace: AgenticTrace | None = None
-    action_plan: list[ActionPlanItem] = Field(default_factory=list)
-    evidence_gaps: list[str] = Field(default_factory=list)
-    insight: InsightSummary | None = None
-    evidence: list[dict] = Field(default_factory=list)
-    recommendations: list[RecommendationDetail] = Field(default_factory=list)
+class ResumeResponse(InvestigationResponse):
+    resumed_from_step: int | None = None

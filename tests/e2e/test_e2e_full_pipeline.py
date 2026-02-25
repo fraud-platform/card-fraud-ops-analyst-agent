@@ -94,14 +94,14 @@ def test_e2e_full_pipeline(
             detail.get("run_id") if isinstance(detail, dict) else None
         )
         assert run_id, f"Run returned 409 but no run_id in response: {r.text}"
-        model_mode = "deterministic"
+        model_mode = "agentic"
         print(f"[RUN] Reused existing run - run_id={run_id}, model_mode={model_mode}")
     else:
         assert r.status_code == 200, f"Run investigation failed: {r.text}"
         run_data = r.json()
-        run_id = run_data["run_id"]
+        run_id = run_data["investigation_id"]
         model_mode = run_data.get("model_mode", "unknown")
-        print(f"[RUN] OK - run_id={run_id}, model_mode={model_mode}")
+        print(f"[RUN] OK - investigation_id={run_id}, model_mode={model_mode}")
     print(f"Request: POST {API_PREFIX}/investigations/run")
     print(f"Request Body: {run_request}")
     print(f"Response: {r.json()}")

@@ -10,17 +10,17 @@ from app.utils.idempotency import (
 def test_compute_insight_key():
     key1 = compute_insight_key(
         transaction_id="tx-123",
-        evaluation_type="deterministic",
+        evaluation_type="agentic",
         transaction_timestamp="2026-01-01T00:00:00Z",
         insight_type="fraud_analysis",
-        model_mode="deterministic",
+        model_mode="agentic",
     )
     key2 = compute_insight_key(
         transaction_id="tx-123",
-        evaluation_type="deterministic",
+        evaluation_type="agentic",
         transaction_timestamp="2026-01-01T00:00:00Z",
         insight_type="fraud_analysis",
-        model_mode="deterministic",
+        model_mode="agentic",
     )
     assert key1 == key2
     assert len(key1) == 64
@@ -29,17 +29,17 @@ def test_compute_insight_key():
 def test_compute_insight_key_different_inputs():
     key1 = compute_insight_key(
         transaction_id="tx-123",
-        evaluation_type="deterministic",
+        evaluation_type="agentic",
         transaction_timestamp="2026-01-01T00:00:00Z",
         insight_type="fraud_analysis",
-        model_mode="deterministic",
+        model_mode="agentic",
     )
     key2 = compute_insight_key(
         transaction_id="tx-456",
-        evaluation_type="deterministic",
+        evaluation_type="agentic",
         transaction_timestamp="2026-01-01T00:00:00Z",
         insight_type="fraud_analysis",
-        model_mode="deterministic",
+        model_mode="agentic",
     )
     assert key1 != key2
 

@@ -28,9 +28,9 @@ be provisioned unless artifact export is implemented in a future phase.
 
 #### LLM (Reasoning) configuration
 
-- `LLM_PROVIDER` (e.g. `ollama/gpt-oss:120b-cloud` or `anthropic/claude-sonnet-4-5-20250929`)
-- `LLM_BASE_URL` (local: `http://localhost:11434`, cloud: `https://ollama.com`)
-- `LLM_API_KEY` (for Ollama Cloud: API key value; for local: can be empty)
+- `LLM_PROVIDER` (e.g. `ollama/gpt-oss:20b`)
+- `LLM_BASE_URL` (`https://ollama.com` for planner/reasoning)
+- `LLM_API_KEY` (Ollama Cloud API key)
 
 If you prefer a single key name for Ollama Cloud, you can set:
 - `OLLAMA_API_KEY` (the service will use this as a fallback for `LLM_API_KEY` and `VECTOR_API_KEY`)

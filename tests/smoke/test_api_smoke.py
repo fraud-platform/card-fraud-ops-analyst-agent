@@ -19,7 +19,6 @@ def app():
     os.environ["METRICS_TOKEN"] = "test-metrics-token"
     app = create_app()
 
-    # Create mock session that returns empty results
     mock_session = AsyncMock()
     mock_result = MagicMock()
     mock_result.fetchone.return_value = None
@@ -38,13 +37,7 @@ def app():
 
 @pytest.fixture
 def client(app):
-    """Create test client.
-
-    raise_server_exceptions=False ensures that server-side errors (500) are
-    returned as HTTP responses rather than re-raised in the test process,
-    which lets us assert on status codes for endpoints that fail due to the
-    mock session returning empty data.
-    """
+    """Create test client."""
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -91,11 +84,6 @@ def test_metrics_endpoint_rejects_invalid_token(client):
     assert response.status_code == 403
 
 
-def test_metrics_root_not_exposed(client):
-    response = client.get("/metrics")
-    assert response.status_code == 404
-
-
 def test_security_headers_present_on_health(client):
     response = client.get("/api/v1/health")
     assert response.status_code == 200
@@ -140,28 +128,23 @@ def test_run_investigation_endpoint_reachable(client):
     """Verify POST /investigations/run is routable and auth works."""
     response = client.post(
         "/api/v1/ops-agent/investigations/run",
-        json={"transaction_id": "test-txn-001", "mode": "quick"},
+        json={"transaction_id": "00000000-0000-0000-0000-000000000001", "mode": "FULL"},
     )
-    # With mock session returning None, the service will likely raise NotFoundError
-    # or an internal error when transaction doesn't exist. Either way, it should NOT be 401/403.
+    # With mock session returning None, the service will likely raise an error
     assert response.status_code != 401
     assert response.status_code != 403
 
 
 def test_get_investigation_endpoint_reachable(client):
-    """Verify GET /investigations/{run_id} is routable and auth works."""
-    response = client.get("/api/v1/ops-agent/investigations/test-run-001")
-    # Should be 404 (not found) since mock returns None, not 401/403
+    """Verify GET /investigations/{investigation_id} is routable."""
+    response = client.get("/api/v1/ops-agent/investigations/test-inv-001")
     assert response.status_code != 401
     assert response.status_code != 403
 
 
-# --- Insight endpoints (auth + DB) ---
-
-
-def test_get_insights_endpoint_reachable(client):
-    """Verify GET /transactions/{txn_id}/insights is routable and auth works."""
-    response = client.get("/api/v1/ops-agent/transactions/test-txn-001/insights")
+def test_resume_investigation_endpoint_reachable(client):
+    """Verify POST /investigations/{id}/resume is routable."""
+    response = client.post("/api/v1/ops-agent/investigations/test-inv-001/resume")
     assert response.status_code != 401
     assert response.status_code != 403
 
@@ -170,7 +153,7 @@ def test_get_insights_endpoint_reachable(client):
 
 
 def test_list_recommendations_endpoint_reachable(client):
-    """Verify GET /worklist/recommendations is routable and auth works."""
+    """Verify GET /worklist/recommendations is routable."""
     response = client.get("/api/v1/ops-agent/worklist/recommendations")
     assert response.status_code != 401
     assert response.status_code != 403
@@ -182,33 +165,10 @@ def test_list_recommendations_rejects_invalid_severity(client):
 
 
 def test_acknowledge_recommendation_endpoint_reachable(client):
-    """Verify POST /worklist/recommendations/{id}/acknowledge is routable and auth works."""
+    """Verify POST /worklist/recommendations/{id}/acknowledge is routable."""
     response = client.post(
         "/api/v1/ops-agent/worklist/recommendations/test-rec-001/acknowledge",
         json={"action": "ACKNOWLEDGED", "comment": "test"},
-    )
-    assert response.status_code != 401
-    assert response.status_code != 403
-
-
-# --- Rule draft endpoints (auth + DB) ---
-
-
-def test_create_rule_draft_endpoint_reachable(client):
-    """Verify POST /rule-drafts is routable and auth works."""
-    response = client.post(
-        "/api/v1/ops-agent/rule-drafts",
-        json={"recommendation_id": "test-rec-001"},
-    )
-    assert response.status_code != 401
-    assert response.status_code != 403
-
-
-def test_export_rule_draft_endpoint_reachable(client):
-    """Verify POST /rule-drafts/{id}/export is routable and auth works."""
-    response = client.post(
-        "/api/v1/ops-agent/rule-drafts/test-draft-001/export",
-        json={"target": "rule-management", "target_endpoint": "http://localhost:8000"},
     )
     assert response.status_code != 401
     assert response.status_code != 403

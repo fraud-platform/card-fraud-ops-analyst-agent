@@ -1,4 +1,4 @@
-﻿# Incidents and Rollback
+# Incidents and Rollback
 
 ## Incident Severity Levels
 
@@ -10,7 +10,7 @@
 
 1. Preserve analyst workflow continuity.
 2. Protect data and access boundaries.
-3. Restore deterministic evidence availability.
+3. Restore evidence-first analysis availability.
 4. Restore optional reasoning capabilities.
 
 ## Rollback Controls

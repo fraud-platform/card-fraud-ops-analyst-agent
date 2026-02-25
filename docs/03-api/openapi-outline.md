@@ -11,7 +11,7 @@
 - `investigations`
 - `insights`
 - `recommendations`
-- `rule-drafts`
+- `monitoring`
 - `health`
 
 ## Security
@@ -21,12 +21,14 @@ OAuth2 JWT bearer with Auth0 audience and scope checks.
 ## Endpoint Summary
 
 - `POST /investigations/run`
-- `GET /investigations/{run_id}`
+- `GET /investigations`
+- `GET /investigations/{investigation_id}`
+- `POST /investigations/{investigation_id}/resume`
+- `GET /investigations/{investigation_id}/rule-draft`
 - `GET /transactions/{transaction_id}/insights`
 - `GET /worklist/recommendations`
-- `POST /recommendations/{recommendation_id}/acknowledge`
-- `POST /rule-drafts`
-- `POST /rule-drafts/{rule_draft_id}/export`
+- `POST /worklist/recommendations/{recommendation_id}/acknowledge`
+- `GET /api/v1/metrics` (requires `X-Metrics-Token`)
 
 ## Shared Components
 

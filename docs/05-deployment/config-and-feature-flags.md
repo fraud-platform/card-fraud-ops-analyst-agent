@@ -8,8 +8,7 @@ All flags use the `OPS_AGENT_` prefix and map to `FeatureFlagsConfig` in `app/co
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `OPS_AGENT_ENABLE_DETERMINISTIC_PIPELINE` | bool | `true` | Enable deterministic evidence pipeline. Should always be `true`. |
-| `OPS_AGENT_ENABLE_LLM_REASONING` | bool | `true` | Enable hybrid mode with LLM reasoning layer. Requires valid provider settings. |
+| `OPS_AGENT_ENABLE_LLM_REASONING` | bool | `true` | Enable LLM reasoning layer. Requires valid provider settings. |
 | `OPS_AGENT_ENABLE_RULE_DRAFT_EXPORT` | bool | `false` | Enable export of rule drafts to Rule Management API. Requires RM ingest endpoint. |
 | `OPS_AGENT_ENFORCE_HUMAN_APPROVAL` | bool | `true` | Require human approval before any rule export. Must be `true` in all environments. |
 | `OPS_AGENT_RULE_MANAGEMENT_BASE_URL` | string | — | Base URL for the Rule Management API (e.g., `http://localhost:8000`). |
@@ -18,7 +17,6 @@ All flags use the `OPS_AGENT_` prefix and map to `FeatureFlagsConfig` in `app/co
 
 | Flag (without prefix) | Local | Test | Prod |
 |-----------------------|-------|------|------|
-| `ENABLE_DETERMINISTIC_PIPELINE` | `true` | `true` | `true` |
 | `ENABLE_LLM_REASONING` | `true` | `true` | `true` |
 | `ENABLE_RULE_DRAFT_EXPORT` | `false` | `false` | `false` |
 | `ENFORCE_HUMAN_APPROVAL` | `true` | `true` | `true` (enforced, raises on startup if `false`) |
@@ -29,43 +27,52 @@ All flags use the `OPS_AGENT_` prefix and map to `FeatureFlagsConfig` in `app/co
 
 ## LLM Configuration
 
-All LLM variables use the `LLM_` prefix and map to `LLMConfig` in `app/core/config.py`. The `LLM_PROVIDER` field uses LiteLLM model string format and is the single source for provider and model selection.
+All LLM variables use the `LLM_` prefix and map to `LLMConfig` in `app/core/config.py`. The `LLM_PROVIDER` field uses the Ollama provider prefix format (`ollama/...` or `ollama_chat/...`) and is the single source for model selection.
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `LLM_PROVIDER` | string | — | LiteLLM model string, e.g. `ollama_chat/llama3.2` or `anthropic/claude-sonnet-4-5-20250929` |
-| `LLM_BASE_URL` | string | — | API base URL, e.g. `http://localhost:11434` for Ollama |
-| `LLM_API_KEY` | SecretStr | — | API key. Use `ollama` for local Ollama (any non-empty string). |
+| `LLM_PROVIDER` | string | `ollama/gpt-oss:20b` | Ollama model string, e.g. `ollama/gpt-oss:20b` |
+| `LLM_BASE_URL` | string | `https://ollama.com` | Ollama Cloud API base URL (localhost is rejected for planner/reasoning) |
+| `LLM_API_KEY` | SecretStr | — | Ollama Cloud API key (falls back to `OLLAMA_API_KEY` when unset) |
 | `LLM_TIMEOUT` | int | `30` | Request timeout in seconds |
 | `LLM_MAX_RETRIES` | int | `1` | Maximum retry attempts on transient failures |
-| `LLM_STAGE_TIMEOUT_SECONDS` | int | `20` | Hard timeout budget for the full reasoning stage (fallback on timeout) |
-| `LLM_FALLBACK_MODEL` | string | `ollama/llama3.2` | Model to use if primary provider fails |
+| `LLM_STAGE_TIMEOUT_SECONDS` | int | `20` | Hard timeout budget for the full reasoning stage |
 | `LLM_CONSISTENCY_THRESHOLD` | float | `0.7` | Minimum agreement threshold for consistency checks |
 | `LLM_PROMPT_GUARD_ENABLED` | bool | `true` | Enable prompt injection and PII guard |
 | `LLM_MAX_PROMPT_TOKENS` | int | `4000` | Maximum tokens allowed in a single prompt |
 | `LLM_MAX_COMPLETION_TOKENS` | int | `384` | Cap generated output tokens to keep latency bounded |
 
-### LLM Provider Examples
+### Prompt Guard Security
 
-**Local Ollama (development):**
-```bash
-LLM_PROVIDER=ollama_chat/llama3.2
-LLM_BASE_URL=http://localhost:11434
-LLM_API_KEY=ollama
-```
+When `LLM_PROMPT_GUARD_ENABLED=true` (default), the following protections are applied:
 
-**Anthropic (cloud):**
-```bash
-LLM_PROVIDER=anthropic/claude-sonnet-4-5-20250929
-LLM_BASE_URL=https://api.anthropic.com
-LLM_API_KEY=<your-anthropic-api-key>
-```
+1. **Prompt Injection Detection**: Scans all prompt payloads for common injection patterns:
+   - Instruction override attempts ("ignore previous instructions")
+   - System role injection ("you are now...", "system:")
+   - Jailbreak attempts
+   - Safety override attempts
+
+2. **Payload Size Limits**: Enforces maximum string length (50,000 chars) and JSON depth (10 levels)
+
+3. **Validation on Block**: If injection patterns are detected, the LLM call is blocked and fallback reasoning is used
+
+### LLM Output Validation
+
+All LLM responses are validated and sanitized before use:
+
+1. **Risk Level Normalization**: Invalid risk levels are normalized to `MEDIUM`
+2. **Confidence Clamping**: Values outside 0.0-1.0 are clamped to valid range
+3. **Content Sanitization**: Narrative and findings are scanned for injection patterns
+4. **Sensitive Key Removal**: Any `system`, `instruction`, `password`, `secret`, or `token` keys are stripped
+5. **Length Limits**: Narratives truncated to 2,000 chars, findings to 20 items, hypotheses to 10 items
+
+### LLM Provider Example (Ollama Cloud)
 
 Set these via Doppler, not directly in environment:
 ```bash
-doppler secrets set LLM_PROVIDER=ollama_chat/llama3.2
-doppler secrets set LLM_BASE_URL=http://localhost:11434
-doppler secrets set LLM_API_KEY=ollama
+doppler secrets set LLM_PROVIDER=ollama/gpt-oss:20b
+doppler secrets set LLM_BASE_URL=https://ollama.com
+doppler secrets set LLM_API_KEY=<ollama-cloud-api-key>
 ```
 
 ## Core Application Config
@@ -182,6 +189,25 @@ To apply configuration changes:
 1. Update secrets in Doppler: `doppler secrets set LLM_API_KEY=<new-key>`
 2. Restart the service: `kubectl rollout restart deployment/ops-analyst-agent` (Kubernetes) or restart the Docker container
 
+## Metrics Token Management
+
+The `/api/v1/metrics` endpoint requires authentication via `X-Metrics-Token` header. The token is configured via `METRICS_TOKEN` environment variable.
+
+### Token Rotation Procedure
+
+1. **Generate new token**: Create a new secure token (e.g., `openssl rand -hex 32`)
+2. **Update Doppler**: `doppler secrets set METRICS_TOKEN=<new-token>`
+3. **Update Prometheus scrape config**: Update the token in Prometheus configuration
+4. **Restart service**: `kubectl rollout restart deployment/ops-analyst-agent`
+5. **Verify**: Check Prometheus is successfully scraping metrics
+
+### Security Recommendations
+
+- Rotate metrics tokens every 90 days
+- Use different tokens per environment (local, test, prod)
+- Never commit tokens to version control
+- Monitor for failed metric scrape attempts in logs
+
 ## JWKS Cache Configuration
 
 The Auth0 JSON Web Key Set (JWKS) is cached to reduce network calls and improve authentication performance. Configuration is in `app/core/auth.py`.
@@ -194,7 +220,7 @@ The Auth0 JSON Web Key Set (JWKS) is cached to reduce network calls and improve 
 
 - **In-memory caching** - JWKS is stored in module-level `_jwks_cache` variable
 - **Async lock protection** - Concurrent requests use `asyncio.Lock()` to prevent cache stampede
-- **Graceful fallback** - If Auth0 is unavailable, stale cached JWKS is used for up to `TTL` seconds
+- **Cache reuse** - If Auth0 is unavailable, stale cached JWKS is used for up to `TTL` seconds
 - **Automatic refresh** - Cache is refreshed every hour or when cache expires
 
 ### Cache Invalidation
@@ -220,7 +246,7 @@ Multiple layers enforce size limits to prevent resource exhaustion and ensure sy
 | GET /worklist/recommendations | `page_size` ≤ 100 | Pagination limit enforced in route handler |
 | GET /transactions/{id}/insights | None (single transaction) | Returns all insights for one transaction |
 | POST /investigations/run | None | Validates request body size via FastAPI |
-| GET /investigations/{run_id} | None | Single investigation run |
+| GET /investigations/{investigation_id} | None | Single investigation run |
 
 ### Database Limits
 
@@ -239,7 +265,7 @@ Multiple layers enforce size limits to prevent resource exhaustion and ensure sy
 | `LLM_MAX_PROMPT_TOKENS` | 4000 | Maximum tokens sent to LLM per request |
 | `LLM_TIMEOUT` | 30 seconds | Maximum wait time for LLM response |
 | `LLM_MAX_RETRIES` | 1 | Retry attempts on transient failures |
-| `LLM_STAGE_TIMEOUT_SECONDS` | 20 seconds | Hard stage budget before deterministic fallback |
+| `LLM_STAGE_TIMEOUT_SECONDS` | 20 seconds | Hard stage budget |
 | `LLM_MAX_COMPLETION_TOKENS` | 384 | Output token cap for response latency control |
 
 ### Payload Size Guidelines

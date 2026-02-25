@@ -1,60 +1,88 @@
-"""Unit tests for LiteLLM provider wrapper."""
+"""Unit tests for Ollama cloud chat provider adapter."""
 
-from types import SimpleNamespace
+from __future__ import annotations
 
 import pytest
+from langchain_core.messages import HumanMessage
 
-from app.core.config import LLMConfig
-from app.core.tracing import clear_tracing_context, set_request_id, set_trace_parent
-from app.llm.provider import LiteLLMProvider, OllamaProvider, get_llm_provider
+from app.llm.provider import OllamaCloudChatModel
+
+
+class _FakeResponse:
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def json(self) -> dict:
+        return self._payload
 
 
 @pytest.mark.asyncio
-async def test_litellm_provider_complete(monkeypatch: pytest.MonkeyPatch):
-    config = LLMConfig(provider="anthropic/claude-sonnet-4-5-20250929")
-    provider = LiteLLMProvider(config)
-    captured_kwargs: dict = {}
+async def test_ainvoke_uses_thinking_fallback_when_content_empty(monkeypatch):
+    model = OllamaCloudChatModel(
+        model="gpt-oss:20b",
+        base_url="https://ollama.com",
+        timeout_seconds=10,
+        api_key="",
+        default_temperature=0.1,
+        default_max_tokens=128,
+    )
 
-    async def fake_acompletion(**kwargs):
-        captured_kwargs.update(kwargs)
-        return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content='{"narrative":"ok"}'))],
-            model="anthropic/claude-sonnet-4-5-20250929",
-            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    calls = 0
+
+    async def fake_post(self, _client, _url, _payload):  # noqa: ANN001
+        nonlocal calls
+        calls += 1
+        return _FakeResponse(
+            {
+                "model": "gpt-oss:20b",
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "thinking": "fallback thinking text",
+                },
+                "prompt_eval_count": 10,
+                "eval_count": 12,
+            }
         )
 
-    clear_tracing_context()
-    set_request_id("req-llm-1")
-    set_trace_parent("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
-    monkeypatch.setattr(provider._litellm, "acompletion", fake_acompletion)
+    monkeypatch.setattr(OllamaCloudChatModel, "_post_with_retries", fake_post)
 
-    response = await provider.complete([{"role": "user", "content": "hello"}])
+    response = await model.ainvoke([HumanMessage(content="test")])
 
-    assert response.content == '{"narrative":"ok"}'
-    assert response.model == "anthropic/claude-sonnet-4-5-20250929"
-    assert response.usage["total_tokens"] == 15
-    assert response.latency_ms >= 0
-    assert captured_kwargs["extra_headers"]["X-Request-ID"] == "req-llm-1"
-    assert (
-        captured_kwargs["extra_headers"]["traceparent"]
-        == "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"
+    assert response.content == "fallback thinking text"
+    assert calls == 3
+    assert response.usage_metadata["total_tokens"] == 22
+
+
+@pytest.mark.asyncio
+async def test_ainvoke_uses_top_level_response_fallback(monkeypatch):
+    model = OllamaCloudChatModel(
+        model="gpt-oss:20b",
+        base_url="https://ollama.com",
+        timeout_seconds=10,
+        api_key="",
+        default_temperature=0.1,
+        default_max_tokens=128,
     )
-    clear_tracing_context()
 
+    calls = 0
 
-def test_get_llm_provider_routes_gpt_models_to_litellm_by_default():
-    settings = SimpleNamespace(llm=LLMConfig(provider="gpt-4o-mini"))
-    provider = get_llm_provider(settings=settings)
-    assert isinstance(provider, LiteLLMProvider)
+    async def fake_post(self, _client, _url, _payload):  # noqa: ANN001
+        nonlocal calls
+        calls += 1
+        return _FakeResponse(
+            {
+                "model": "gpt-oss:20b",
+                "response": '{"narrative":"ok","risk_level":"LOW","key_findings":[],"hypotheses":[],"confidence":0.5}',
+                "message": {"role": "assistant", "content": ""},
+                "prompt_eval_count": 5,
+                "eval_count": 9,
+            }
+        )
 
+    monkeypatch.setattr(OllamaCloudChatModel, "_post_with_retries", fake_post)
 
-def test_get_llm_provider_routes_explicit_ollama_provider_to_ollama():
-    settings = SimpleNamespace(llm=LLMConfig(provider="ollama/llama3.2"))
-    provider = get_llm_provider(settings=settings)
-    assert isinstance(provider, OllamaProvider)
+    response = await model.ainvoke([HumanMessage(content="test")])
 
-
-def test_get_llm_provider_routes_ollama_host_to_ollama():
-    settings = SimpleNamespace(llm=LLMConfig(provider="gpt-oss:20b", base_url="https://ollama.com"))
-    provider = get_llm_provider(settings=settings)
-    assert isinstance(provider, OllamaProvider)
+    assert '"risk_level":"LOW"' in response.content
+    assert calls == 1

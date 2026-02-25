@@ -32,18 +32,18 @@ class InsightRepository:
 
         query = text("""
             INSERT INTO fraud_gov.ops_agent_insights
-                (insight_id, transaction_id, severity, insight_summary, insight_type,
+                (insight_id, transaction_id, severity, summary, insight_type,
                  generated_at, model_mode, idempotency_key)
             VALUES
                 (:insight_id, :transaction_id, :severity, :summary, :insight_type,
                  :generated_at, :model_mode, :idempotency_key)
             ON CONFLICT (idempotency_key) DO UPDATE
             SET severity = EXCLUDED.severity,
-                insight_summary = EXCLUDED.insight_summary,
+                summary = EXCLUDED.summary,
                 insight_type = EXCLUDED.insight_type,
                 generated_at = EXCLUDED.generated_at,
                 model_mode = EXCLUDED.model_mode
-            RETURNING insight_id, transaction_id, severity, insight_summary AS summary, insight_type,
+            RETURNING insight_id, transaction_id, severity, summary, insight_type,
                       generated_at, model_mode
         """)
         result = await self.session.execute(
@@ -62,7 +62,7 @@ class InsightRepository:
         row = result.fetchone()
         if row is None:
             select_query = text("""
-                SELECT insight_id, transaction_id, severity, insight_summary AS summary, insight_type,
+                SELECT insight_id, transaction_id, severity, summary, insight_type,
                        generated_at, model_mode
                 FROM fraud_gov.ops_agent_insights
                 WHERE idempotency_key = :idempotency_key
@@ -104,8 +104,7 @@ class InsightRepository:
     async def get_insights_for_transaction(self, transaction_id: str) -> list[dict[str, Any]]:
         """Get all insights for a transaction."""
         query = text("""
-            SELECT insight_id, transaction_id, severity,
-                   insight_summary AS summary,  -- Alias for schema compatibility
+            SELECT insight_id, transaction_id, severity, summary,
                    insight_type, generated_at, model_mode
             FROM fraud_gov.ops_agent_insights
             WHERE transaction_id = :transaction_id
@@ -118,8 +117,7 @@ class InsightRepository:
         """Get all insights for a transaction with evidence (single query - no N+1)."""
         query = text("""
             SELECT
-                i.insight_id, i.transaction_id, i.severity,
-                i.insight_summary AS summary,  -- Alias for schema compatibility
+                i.insight_id, i.transaction_id, i.severity, i.summary,
                 i.insight_type, i.generated_at, i.model_mode,
                 COALESCE(
                     jsonb_agg(
@@ -135,7 +133,7 @@ class InsightRepository:
             FROM fraud_gov.ops_agent_insights i
             LEFT JOIN fraud_gov.ops_agent_evidence e ON e.insight_id = i.insight_id
             WHERE i.transaction_id = :transaction_id
-            GROUP BY i.insight_id, i.transaction_id, i.severity, i.insight_summary,
+            GROUP BY i.insight_id, i.transaction_id, i.severity, i.summary,
                      i.insight_type, i.generated_at, i.model_mode
             ORDER BY i.generated_at DESC
         """)
@@ -149,29 +147,3 @@ class InsightRepository:
             insights.append(insight_dict)
 
         return insights
-
-    async def get_evidence(self, insight_id: str) -> list[dict[str, Any]]:
-        """Get all evidence for an insight."""
-        query = text("""
-            SELECT evidence_id, insight_id, evidence_kind, evidence_payload, created_at
-            FROM fraud_gov.ops_agent_evidence
-            WHERE insight_id = :insight_id
-            ORDER BY created_at ASC
-        """)
-        result = await self.session.execute(query, {"insight_id": insight_id})
-        return [row_to_dict(row) for row in result.fetchall()]
-
-    async def get(self, insight_id: str) -> dict[str, Any] | None:
-        """Get insight by ID."""
-        query = text("""
-            SELECT insight_id, transaction_id, severity,
-                   insight_summary AS summary,  -- Alias for schema compatibility
-                   insight_type, generated_at, model_mode
-            FROM fraud_gov.ops_agent_insights
-            WHERE insight_id = :insight_id
-        """)
-        result = await self.session.execute(query, {"insight_id": insight_id})
-        row = result.fetchone()
-        if row is None:
-            return None
-        return row_to_dict(row)

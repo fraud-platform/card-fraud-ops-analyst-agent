@@ -13,12 +13,6 @@ class AcknowledgeRequest(BaseModel):
     comment: str | None = None
 
 
-class RecommendationListResponse(BaseModel):
-    recommendations: list[RecommendationDetail]
-    next_cursor: str | None = None
-    total: int = 0
-
-
 class RecommendationDetail(BaseModel):
     recommendation_id: str
     insight_id: str
@@ -29,3 +23,9 @@ class RecommendationDetail(BaseModel):
     acknowledged_by: str | None = None
     acknowledged_at: datetime | None = None
     created_at: datetime
+
+
+class RecommendationListResponse(BaseModel):
+    recommendations: list[RecommendationDetail]
+    next_cursor: str | None = None
+    total: int = 0

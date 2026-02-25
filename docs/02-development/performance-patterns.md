@@ -4,8 +4,8 @@
 
 This document catalogs performance-critical code patterns in the Card Fraud Ops Analyst Agent. Understanding these patterns is essential for maintaining the reliability targets defined in the architecture:
 
-- P95 quick investigation <= 2 seconds
-- P95 deep investigation <= 8 seconds
+- P95 investigation <= 30000ms in agentic local/platform E2E
+- P95 detail fetch <= 4000ms
 - Recommendation generation failure rate < 1% over 1h windows
 
 ## Parallel Query Execution
@@ -14,7 +14,7 @@ This document catalogs performance-critical code patterns in the Card Fraud Ops 
 
 When building investigation context, multiple independent queries are executed in parallel to reduce total latency.
 
-**Location:** `app/agents/context_builder.py`
+**Location:** `app/tools/context_tool.py`
 
 ```python
 # Parallelize independent queries for better performance
@@ -236,7 +236,7 @@ jwks = response.json()
 
 ## LLM Timeout and Retry Patterns
 
-### Pattern: Configurable timeout with fallback model
+### Pattern: Configurable timeout and provider routing
 
 LLM calls have configurable timeouts and retry logic to handle transient failures.
 
@@ -247,22 +247,17 @@ LLM calls have configurable timeouts and retry logic to handle transient failure
 ```python
 class LLMConfig(BaseSettings):
     timeout: int = Field(default=30)       # Seconds
-    max_retries: int = Field(default=3)    # Retry attempts
-    fallback_model: str = Field(default="ollama/llama3.2")
+    max_retries: int = Field(default=1)    # Retry attempts
+    stage_timeout_seconds: int = Field(default=20)
 ```
 
-**LiteLLMProvider (with implicit retries):**
+**LangChain provider configuration:**
 
 ```python
-async def complete(self, messages: list[dict[str, str]], **kwargs):
-    timeout = kwargs.pop("timeout", self.config.timeout)
-
-    response = await self._litellm.acompletion(
-        model=model,
-        messages=messages,
-        timeout=timeout,
-        **kwargs,
-    )
+def get_chat_model(settings: Settings) -> BaseChatModel:
+    model_spec = settings.planner.model_name
+    provider, _, model_name = model_spec.partition("/")
+    ...
 ```
 
 **OllamaProvider (explicit timeout):**
@@ -281,7 +276,7 @@ async def complete(self, messages: list[dict[str, str]], **kwargs):
 - Default 30-second timeout per LLM call
 - Timeout applies to HTTP connection + response time
 - `httpx.Timeout` raises `TimeoutException` on expiry
-- LiteLLM may retry internally (retry logic is provider-dependent)
+- Retry strategy should be applied at tool/service boundaries for transient failures
 
 **Retry patterns:**
 - Implement retry at service layer, not provider layer
@@ -458,7 +453,7 @@ for result in results:
 The service automatically emits traces for:
 - HTTP requests (FastAPI auto-instrumentation)
 - Database queries (SQLAlchemy instrumentation)
-- LLM calls (manual spans in reasoning_engine)
+- LLM calls (manual spans in planner/reasoning tools)
 
 View traces in Jaeger UI: `http://localhost:16686`
 

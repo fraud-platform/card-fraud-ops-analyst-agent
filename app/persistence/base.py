@@ -3,17 +3,30 @@
 import base64
 import json
 import uuid
+from datetime import datetime
 from typing import Any
 
 
 def row_to_dict(row: Any) -> dict[str, Any]:
-    """Convert a SQLAlchemy row to a dict, casting UUID values to strings.
+    """Convert a SQLAlchemy row to a dict, casting asyncpg types to JSON-safe primitives.
 
-    asyncpg returns UUID columns as uuid.UUID objects. Pydantic schemas
-    expect str for ID fields, so we convert here at the persistence boundary.
+    asyncpg returns:
+    - UUID columns as uuid.UUID objects → convert to str
+    - TIMESTAMPTZ columns as datetime objects → convert to ISO-8601 str
+
+    This ensures all values from the persistence boundary are JSON-serializable
+    and compatible with Pydantic schemas that use str for ID and timestamp fields.
     """
     d = dict(row._mapping)
-    return {k: str(v) if isinstance(v, uuid.UUID) else v for k, v in d.items()}
+    result = {}
+    for k, v in d.items():
+        if isinstance(v, uuid.UUID):
+            result[k] = str(v)
+        elif isinstance(v, datetime):
+            result[k] = v.isoformat()
+        else:
+            result[k] = v
+    return result
 
 
 class CursorDecodeError(Exception):

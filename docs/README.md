@@ -70,27 +70,17 @@ Documentation-first repository for enterprise-grade ops analyst agent implementa
 - `07-reference/0001-tm-as-source-of-truth.md`
 - `07-reference/0002-human-approval-finality.md`
 - `07-reference/0003-fraud-gov-shared-schema-agent-tables.md`
-- `07-reference/0004-hybrid-deterministic-plus-llm-pipeline.md`
 - `07-reference/0005-redaction-and-pseudonym-policy.md`
 - `07-reference/0006-rule-draft-package-and-maker-checker-handoff.md`
-- `07-reference/0007-dual-llm-provider-cloud-default-local-fallback.md`
 - `07-reference/0008-rollout-gating-and-slo-policy.md`
-- `07-reference/0009-llm-provider-abstraction.md`
+- `07-reference/agentic/README.md`
+- `07-reference/agentic/adr_001_agentic_fraud_analyst_architecture.md`
+- `07-reference/agentic/tdd_001_master_transformation_plan.md`
 
-### `archive` - Historical Working Docs
+### Archive Policy
 
-- `archive/README.md`
-- `archive/code-simplifier-report.md`
-- `archive/e2e-improvement-plan.md`
-- `archive/execution-plan-e2e-ollama.md`
-- `archive/implementation-roadmap.md`
-- `archive/phase-2-3-implementation-plan.md`
-- `archive/phase-2-implementation-outline.md`
-- `archive/phase-3-implementation-outline.md`
-- `archive/08-improvements/fraud-analytics-improvements-plan.md`
-- `archive/08-improvements/velocity-data-architecture-analysis.md`
-- `archive/08-improvements/velocity-flow-verification.md`
-- `archive/08-improvements/velocity-quick-reference.md`
+- Legacy planning/scratch docs were removed from `docs/archive/`.
+- Keep only current, code-aligned agentic documentation under `docs/01-setup` to `docs/07-reference`.
 
 ## Core Index Files
 

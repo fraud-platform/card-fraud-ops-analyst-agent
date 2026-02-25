@@ -4,15 +4,15 @@ Autonomous fraud analyst assistant for the Card Fraud Platform. Generates explai
 
 ## Status
 
-Phase 1-3: Complete. Integration: Complete. Monitoring: Complete.
-Quality gates: lint/format clean; unit/smoke suites passing (run commands below for current counts).
-Latest E2E scenario suite: 23/23 passed (generated 2026-02-18 in `htmlcov/e2e-scenarios-report.html`).
+Agentic graph runtime: active.
+Quality gates: enforced via pre-commit/pre-push hooks and documented commands below.
+Latest matrix run: 31/31 scenarios completed on 2026-02-22 (`htmlcov/e2e-31-matrix-report-after-docker-fix.json` and `htmlcov/e2e-scenarios-report.html`).
 
 ## Stack
 
 - Python 3.14, FastAPI, async SQLAlchemy (asyncpg)
 - Auth0 JWT authentication with scope-based authorization
-- LiteLLM for bounded LLM reasoning (Ollama local, Anthropic cloud)
+- Ollama Cloud chat model adapter for planner and reasoning stages
 - OpenTelemetry + Prometheus for observability
 - PostgreSQL: reads `fraud_gov` schema, writes `ops_agent_*` tables
 - Port: 8003
@@ -119,6 +119,11 @@ uv run db-load-test-data                               # Load test data from liv
 uv run lint                                            # Run ruff check
 uv run format                                          # Run ruff format
 
+# Git hooks (recommended)
+uv run pre-commit install --hook-type pre-commit --hook-type pre-push
+uv run pre-commit run --all-files
+uv run pre-commit run --all-files --hook-stage pre-push
+
 # E2E (requires Dockerized ops-agent on port 8003 + DB)
 doppler run --config local -- uv run python scripts/seed_test_scenarios.py   # Seed scenarios + manifest
 uv run e2e-local                                       # Local end-to-end test
@@ -129,22 +134,21 @@ npx playwright open htmlcov/e2e-scenarios-report.html # Review custom HTML repor
 
 ```
 app/
-  api/routes/       # FastAPI route handlers (investigations, insights, worklist, rule-drafts)
-  agents/           # Pipeline stages: context_builder, pattern_engine, recommendation_engine,
-                    #   reasoning_engine, rule_draft_engine, similarity_engine, audit_engine
-                    #   *_core.py = pure logic (no DB), *.py = DB-bound adapter
+  api/routes/       # FastAPI route handlers (health, monitoring, investigations, insights, recommendations)
+  agent/            # LangGraph runtime (planner, executor, completion, state, registry)
+  tools/            # Tool modules (context, pattern, similarity, reasoning, recommendation, rule_draft)
   services/         # Business logic services (investigation, insight, recommendation, rule_draft)
-  persistence/      # Async SQLAlchemy repositories (run, insight, recommendation, rule_draft, audit)
-  clients/          # HTTP clients (rule_management_client, embedding_client)
-  llm/              # LiteLLM provider, prompt templates, redaction, consistency checks
+  persistence/      # Async SQLAlchemy repositories (investigation, insight, recommendation, rule_draft, audit)
+  clients/          # HTTP clients (tm_client, rule_management_client, embedding_client)
+  llm/              # LLM provider abstractions and routing
   core/             # Config, auth, database, logging, metrics, errors
   schemas/v1/       # Pydantic request/response schemas
-cli/                # uv run entry points (doppler_local, db_setup, auth0_bootstrap, test, lint, e2e)
+cli/                # uv run entry points (doppler_local, db_setup, auth0_bootstrap, test, lint, e2e, openapi)
 scripts/            # DB migration scripts, data loaders, Auth0 setup utilities
 tests/
   unit/             # Unit tests (mocked DB + LLM, no external dependencies)
   smoke/            # Smoke tests (FastAPI TestClient)
-db/migrations/      # SQL migration files (001-007)
+db/migrations/      # SQL migration files (001+)
 docs/               # Architecture, API, testing, deployment, operations documentation
 ```
 
@@ -154,13 +158,14 @@ All endpoints are prefixed with `/api/v1/ops-agent`.
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
-| GET | `/transactions/{transaction_id}/insights` | `ops_agent:read` | Latest insight for a transaction |
+| GET | `/transactions/{transaction_id}/insights` | `ops_agent:read` | Insights for a transaction |
+| GET | `/investigations` | `ops_agent:read` | List investigations |
 | POST | `/investigations/run` | `ops_agent:run` | Trigger investigation pipeline |
-| GET | `/investigations/{run_id}` | `ops_agent:read` | Fetch investigation result |
-| GET | `/worklist/recommendations` | `ops_agent:read` | List pending recommendations |
-| POST | `/worklist/recommendations/{id}/acknowledge` | `ops_agent:ack` | Acknowledge a recommendation |
-| POST | `/rule-drafts` | `ops_agent:draft` | Create rule draft from insight |
-| POST | `/rule-drafts/{id}/export` | `ops_agent:draft` | Export draft to Rule Management |
+| GET | `/investigations/{investigation_id}` | `ops_agent:read` | Fetch investigation detail |
+| POST | `/investigations/{investigation_id}/resume` | `ops_agent:run` | Resume an interrupted investigation |
+| GET | `/investigations/{investigation_id}/rule-draft` | `ops_agent:read` | Fetch generated rule draft |
+| GET | `/worklist/recommendations` | `ops_agent:read` | List recommendations |
+| POST | `/worklist/recommendations/{recommendation_id}/acknowledge` | `ops_agent:ack` | Acknowledge or reject recommendation |
 
 ## Core Principle
 
@@ -170,21 +175,21 @@ Final fraud decisions and rule activation decisions are always human-controlled.
 
 This is an intelligence platform with agentic analysis, not autonomous adjudication.
 
-- Agentic behavior: multi-stage investigation pipeline, vector similarity retrieval, LLM reasoning, deterministic policy checks, and recommendation drafting.
+- Agentic behavior: multi-stage investigation pipeline, vector similarity retrieval, LLM reasoning, rule-sequence safeguards, and recommendation drafting.
 - Governance boundary: human analysts remain the decision authority for fraud disposition and rule activation.
 - Outcome focus: improve analyst speed and consistency with explainable, auditable, evidence-backed recommendations.
 - Auditability proof in API: investigation responses include `agentic_trace`, `action_plan`, and `evidence_gaps` for per-run AI/tool usage evidence.
 
 ## Documentation
 
-- [Code Map](./CODEMAP.md) — architecture overview, modules, data flow, patterns
-- [Developer Guide](./DEVELOPER_GUIDE.md) — setup, workflow, architecture
-- [Agent Conventions](./AGENTS.md) — quality gates, coding standards, no-shortcuts policy
-- [Docs Index](./docs/README.md) — architecture, API, testing, deployment, operations
-- [Local Setup](./docs/01-setup/local-setup.md) — step-by-step local environment setup
-- [Config and Feature Flags](./docs/05-deployment/config-and-feature-flags.md) — all environment variables
-- [Testing Strategy](./docs/04-testing/testing-strategy.md) — test layers and CI strategy
-- [Portal Integration](./docs/03-api/portal-integration.md) — API integration map for the portal
+- [Code Map](./docs/codemap.md) - architecture overview, modules, data flow, patterns
+- [Developer Guide](./DEVELOPER_GUIDE.md) - setup, workflow, architecture
+- [Agent Conventions](./AGENTS.md) - quality gates, coding standards, no-shortcuts policy
+- [Docs Index](./docs/README.md) - architecture, API, testing, deployment, operations
+- [Local Setup](./docs/01-setup/local-setup.md) - step-by-step local environment setup
+- [Config and Feature Flags](./docs/05-deployment/config-and-feature-flags.md) - all environment variables
+- [Testing Strategy](./docs/04-testing/testing-strategy.md) - test layers and CI strategy
+- [Portal Integration](./docs/03-api/portal-integration.md) - API integration map for the portal
 
 ## Test Coverage
 

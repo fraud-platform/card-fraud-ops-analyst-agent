@@ -18,7 +18,6 @@
 - `docs/05-deployment/` - deployment design, configuration, and release gates
 - `docs/06-operations/` - runbooks, observability, governance, and database operations
 - `docs/07-reference/` - ADRs and cross-repo references
-- `docs/archive/` - archived planning notes and superseded execution docs
 
 ## Primary Design Documents
 
@@ -47,6 +46,7 @@
 - `storage-and-migrations.md` - Schema design, migrations, indexing, SQL injection prevention
 - `idempotency-and-replay.md` - Idempotency keys and replay protection
 - `performance-patterns.md` - Parallel queries, caching, timeouts, best practices
+- `app/templates/trace_viewer.py` - Self-contained HTML trace viewer template
 
 ### 03-api - API
 - `openapi-outline.md` - OpenAPI specification overview
@@ -86,19 +86,13 @@
 - `0001-tm-as-source-of-truth.md` - Transaction Management as source of truth
 - `0002-human-approval-finality.md` - Human approval finality policy
 - `0003-fraud-gov-shared-schema-agent-tables.md` - Shared schema and agent tables
-- `0004-hybrid-deterministic-plus-llm-pipeline.md` - Hybrid pipeline architecture
 - `0005-redaction-and-pseudonym-policy.md` - Redaction and pseudonymization policy
 - `0006-rule-draft-package-and-maker-checker-handoff.md` - Rule draft handoff process
-- `0007-dual-llm-provider-cloud-default-local-fallback.md` - LLM provider abstraction
 - `0008-rollout-gating-and-slo-policy.md` - Rollout gating and SLO policy
-- `0009-llm-provider-abstraction.md` - LLM provider abstraction details
+- `agentic/README.md` - Agentic architecture ADR/TDD index
+- `agentic/adr_001_agentic_fraud_analyst_architecture.md` - Agentic runtime architecture decision
+- `agentic/tdd_001_master_transformation_plan.md` - Agentic transformation implementation plan
 
 ## Program Plan
 
-- `phase-1-implementation-plan.md` - Phase 1 implementation plan
-- `archive/implementation-roadmap.md` - Archived overall implementation roadmap
-- `archive/phase-2-implementation-outline.md` - Archived phase 2 implementation outline
-- `archive/phase-3-implementation-outline.md` - Archived phase 3 implementation outline
-- `archive/phase-2-3-implementation-plan.md` - Archived phase 2-3 implementation plan
-- `archive/08-improvements/` - Archived future-improvement analysis set
-- `archive/execution-plan-e2e-ollama.md` - Archived E2E execution notes with Ollama
+- `07-reference/agentic/comprehensive-review-and-cleanup-plan.md` - Agentic modernization and cleanup plan

@@ -3,7 +3,8 @@
 import logging
 import time
 
-from fastapi import APIRouter
+import httpx
+from fastapi import APIRouter, Request
 from sqlalchemy import text
 
 from app.core.config import AppEnvironment, get_settings
@@ -22,10 +23,13 @@ async def health_check():
 
 
 @router.get("/health/ready", response_model=ReadyResponse)
-async def readiness_check():
+async def readiness_check(request: Request):
     """Readiness check with dependency status."""
     settings = get_settings()
     database_ok = False
+    tm_api_ok = False
+    embedding_ok: bool | None = None
+
     try:
         engine = get_engine()
         started = time.perf_counter()
@@ -41,27 +45,75 @@ async def readiness_check():
             "Health readiness DB check failed",
             extra={"route": "/api/v1/health/ready", "dependency": "database", "error": str(exc)},
         )
-        database_ok = False
 
-    status = "ready" if database_ok else "degraded"
+    tm_client = getattr(request.app.state, "tm_client", None)
+    if tm_client is not None:
+        try:
+            tm_api_ok = await tm_client.health_check()
+        except Exception:
+            logger.exception("Health readiness TM API check failed")
+    else:
+        logger.warning("TMClient not available on app.state for readiness check")
+
+    if settings.vector_search.enabled:
+        embedding_ok = await _check_embedding_service(settings)
+
+    status = "ready" if (database_ok and tm_api_ok) else "degraded"
+
+    dependencies: dict[str, bool] = {
+        "database": database_ok,
+        "tm_api": tm_api_ok,
+    }
+
+    if embedding_ok is not None:
+        dependencies["embedding_service"] = embedding_ok
+
     features: dict[str, bool] = {}
-    # Feature flags are operationally sensitive; keep hidden unless explicitly
-    # enabled for local debugging.
     if settings.security.expose_ready_features and settings.app.env == AppEnvironment.LOCAL:
         features = {
             "enable_llm_reasoning": settings.features.enable_llm_reasoning,
             "vector_enabled": settings.vector_search.enabled,
-            "counter_evidence_enabled": settings.features.counter_evidence_enabled,
-            "conflict_matrix_enabled": settings.features.conflict_matrix_enabled,
-            "explanation_builder_enabled": settings.features.explanation_builder_enabled,
             "enable_rule_draft_export": settings.features.enable_rule_draft_export,
         }
     return ReadyResponse(
         status=status,
         database=database_ok,
-        dependencies={"database": database_ok},
+        dependencies=dependencies,
         features=features,
+        embedding_service=embedding_ok,
     )
+
+
+async def _check_embedding_service(settings) -> bool | None:
+    """Check embedding service health when vector search is enabled.
+
+    Returns True if healthy, False if unhealthy, None if check was not performed.
+    """
+    config = settings.vector_search
+    if not config.enabled or not config.api_base:
+        return None
+
+    try:
+        timeout = httpx.Timeout(5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            base_url = config.api_base.rstrip("/")
+            response = await client.get(f"{base_url}/", follow_redirects=True)
+            if response.status_code < 500:
+                return True
+            logger.warning(
+                "Embedding service health check returned error status",
+                extra={"status_code": response.status_code},
+            )
+            return False
+    except httpx.TimeoutException:
+        logger.warning("Embedding service health check timed out")
+        return False
+    except Exception as exc:
+        logger.warning(
+            "Embedding service health check failed",
+            extra={"error": str(exc)},
+        )
+        return False
 
 
 @router.get("/health/live", response_model=HealthResponse)

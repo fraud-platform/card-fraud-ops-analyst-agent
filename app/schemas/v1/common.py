@@ -24,6 +24,20 @@ class RunStatus(StrEnum):
     PARTIAL = "PARTIAL"
 
 
+class InvestigationStatus(StrEnum):
+    PENDING = "PENDING"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    TIMED_OUT = "TIMED_OUT"
+
+
+class ToolStatus(StrEnum):
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+    TIMED_OUT = "TIMED_OUT"
+
+
 class RecommendationStatus(StrEnum):
     OPEN = "OPEN"
     ACKNOWLEDGED = "ACKNOWLEDGED"
@@ -45,6 +59,8 @@ class ExportStatus(StrEnum):
 
 
 class ModelMode(StrEnum):
+    AGENTIC = "agentic"
+    # Legacy values remain for backward-compatible reads from older rows/artifacts.
     DETERMINISTIC = "deterministic"
     HYBRID = "hybrid"
 

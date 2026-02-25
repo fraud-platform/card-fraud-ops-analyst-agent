@@ -21,7 +21,7 @@
 ### Flow A: Continuous triage
 
 1. Candidate transactions selected from TM review queue.
-2. Deterministic evidence computed.
+2. Evidence-first analysis computed.
 3. Optional LLM reasoning produces concise narrative.
 4. Recommendation queue updated in `ops_agent_recommendations`.
 5. Portal displays queue for analyst action.
@@ -42,6 +42,6 @@
 
 ## Orchestration Rules
 
-- Deterministic stage must complete before reasoning stage.
-- If LLM stage fails, deterministic recommendation remains available.
+- Context/pattern/similarity stages must complete before reasoning stage.
+- If LLM stage fails, rule-sequence fallback recommendation remains available.
 - Every state transition must be persisted and auditable.

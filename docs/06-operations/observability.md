@@ -71,7 +71,7 @@ docker logs ops-agent | grep '"level":"ERROR"'
 {
   "event": "Investigation completed",
   "level": "info",
-  "logger": "app.agents.pipeline",
+  "logger": "app.agent.executor",
   "request_id": "abc-123-def-456",
   "run_id": "0192abcd-1234-5678-9012-abcdef123456",
   "transaction_id": "0192fedc-9876-5432-1098-zyxwvutsrqpon",
@@ -125,6 +125,22 @@ rate(ops_agent_llm_calls_total[5m])
 
 **UI:** http://localhost:16686
 
+**Built-in Trace Viewer Alternative:**
+
+For a self-contained HTML trace viewer without external dependencies:
+
+```
+GET /api/v1/ops-agent/investigations/{investigation_id}/trace
+```
+
+This returns a LangSmith-like experience with:
+- Investigation steps and timeline
+- Planner decisions
+- Tool executions
+- LLM prompts and responses
+- Evidence and recommendations
+- All data embedded in HTML (no external dependencies)
+
 **Why Jaeger Shows Empty:**
 
 If you see no traces in Jaeger, check:
@@ -158,23 +174,28 @@ If you see no traces in Jaeger, check:
 **What You'll See in Traces:**
 
 ```
-├── POST /api/v1/ops-agent/investigations/run (total duration)
-    ├── context_build (fetch transaction data)
-    ├── pattern_analysis (fraud pattern detection)
-    ├── similarity_analysis (vector search)
-    ├── llm_reasoning (LLM call - if enabled)
-    │   ├── llm.http_request (actual HTTP call to Ollama)
-    │   └── llm.response_parsing
-    └── recommendations (generate recommendations)
+├── investigation.run (root span - total duration)
+│   ├── context_build (fetch transaction data)
+│   ├── pattern_analysis (fraud pattern detection)
+│   ├── similarity_analysis (vector search)
+│   ├── llm_reasoning (LLM reasoning span)
+│   │   ├── llm.request (LLM prompt sent)
+│   │   ├── llm.http_request (actual HTTP call to Ollama)
+│   │   └── llm.response (LLM response received)
+│   └── recommendations (generate recommendations)
 ```
 
-**Trace Attributes (for filtering):**
+**Jaeger Enrichment:**
+
+The trace includes additional context attributes:
 - `run.id` - Investigation run ID
-- `run.mode` - `deterministic` or `hybrid`
+- `run.mode` - `agentic`
 - `transaction.id` - Transaction being investigated
 - `pattern.severity` - `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`
 - `llm.latency_ms` - LLM response time in milliseconds
 - `llm.model` - Model used (e.g., `ollama/gpt-oss:20b`)
+- `llm.prompt_tokens` - Number of prompt tokens
+- `llm.completion_tokens` - Number of completion tokens
 
 ---
 
@@ -244,7 +265,7 @@ docker logs ops-agent --tail 200 | grep -E "obs-check-00|run_id"
 Jaeger validation:
 1. Open http://localhost:16686
 2. Select service `card-fraud-ops-analyst-agent`
-3. Search recent traces for operation `POST /api/v1/ops-agent/investigations/run`
+3. Search recent traces for operation `investigation.run` or `POST /api/v1/ops-agent/investigations/run`
 4. Confirm stage spans exist (`context_build`, `pattern_analysis`, `similarity_analysis`, `llm_reasoning`, `recommendations`)
 5. Confirm span attributes include `run.id` and `transaction.id`
 

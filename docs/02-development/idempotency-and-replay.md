@@ -2,7 +2,7 @@
 
 ## Objective
 
-Guarantee deterministic and non-duplicative agent artifacts under retries, restarts, and reprocessing.
+Guarantee idempotent and non-duplicative agent artifacts under retries, restarts, and reprocessing.
 
 ## Idempotency Keys
 

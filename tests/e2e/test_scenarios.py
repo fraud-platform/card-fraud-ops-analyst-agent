@@ -166,7 +166,7 @@ def test_vector_embedding_preflight(e2e_reporter: E2EReporter):
 
 @pytest.mark.e2e
 def test_seed_manifest_preflight(e2e_reporter: E2EReporter):
-    """Fail fast when deterministic seed manifest is missing or incomplete."""
+    """Fail fast when seeded scenario manifest is missing or incomplete."""
     if e2e_reporter:
         e2e_reporter.begin_scenario("Seed Manifest Preflight")
     required = {scenario.value for scenario in FraudScenario}
@@ -387,7 +387,7 @@ ACCEPTANCE_KPI_THRESHOLDS: dict[str, float] = {
     "fraud_recall_medium_plus": 0.80,
     "low_risk_precision_low_only": 1.0,
     "recommendation_coverage": 1.0,
-    # Hybrid pipeline includes external LLM calls and deterministic fallback when LLM times out.
+    # Agentic pipeline includes external LLM calls and fallback when LLM times out.
     # Keep a realistic upper bound for end-to-end investigation latency in this environment.
     "run_investigation_p95_ms": 30000.0,
     "detail_fetch_p95_ms": 4000.0,
@@ -663,7 +663,7 @@ class ScenarioTestRunner:
                         "transaction_id": manifest_txn_id,
                         "manifest_path": str(SEED_MANIFEST_PATH),
                     },
-                    notes=["[PASS] Using deterministic seeded transaction from manifest"],
+                    notes=["[PASS] Using seeded transaction from manifest"],
                 )
             self.log("SETUP", f"Using seeded transaction from manifest: {manifest_txn_id}")
             return manifest_txn_id
@@ -882,9 +882,9 @@ class ScenarioTestRunner:
             body = response.json()
             errors = body.get("errors", {})
             detail = body.get("detail", {})
-            run_id = (errors.get("run_id") if isinstance(errors, dict) else None) or (
-                detail.get("run_id") if isinstance(detail, dict) else None
-            )
+            run_id = (
+                errors.get("existing_investigation_id") if isinstance(errors, dict) else None
+            ) or (detail.get("existing_investigation_id") if isinstance(detail, dict) else None)
             if self._reporter:
                 self._reporter.record_stage(
                     stage_name="Run Investigation",
@@ -895,12 +895,14 @@ class ScenarioTestRunner:
                     request_body=req_body,
                     response_status=409,
                     response_body=body,
-                    notes=["[PASS] Already investigated — reusing existing run_id"],
+                    notes=["[PASS] Already investigated — reusing existing investigation_id"],
                 )
             if run_id:
-                self.log("RUN", f"Already investigated, reusing run_id={run_id}")
-                return {"run_id": run_id, "model_mode": "deterministic"}
-            raise AssertionError(f"Run returned 409 but no run_id in response: {response.text}")
+                self.log("RUN", f"Already investigated, reusing investigation_id={run_id}")
+                return {"investigation_id": run_id, "model_mode": "agentic"}
+            raise AssertionError(
+                f"Run returned 409 but no investigation_id in conflict response: {response.text}"
+            )
 
         if self._reporter:
             self._reporter.record_stage(
@@ -920,7 +922,9 @@ class ScenarioTestRunner:
             raise AssertionError(f"Run investigation failed: {response.status_code}")
 
         data = response.json()
-        self.log("RUN", f"run_id={data.get('run_id')}, mode={data.get('model_mode')}")
+        self.log(
+            "RUN", f"investigation_id={data.get('investigation_id')}, mode={data.get('model_mode')}"
+        )
         return data
 
     def get_investigation_detail(self, run_id: str) -> dict[str, Any]:
@@ -1141,7 +1145,7 @@ class ScenarioTestRunner:
                 "evidence_summary": [self._summarize_evidence_item(e) for e in evidence[:10]]
                 if evidence
                 else [],
-                "model_mode": detail.get("model_mode", "deterministic"),
+                "model_mode": detail.get("model_mode", "agentic"),
                 "stage_durations": detail.get("stage_durations", {}),
                 "server_features": self.server_features,
                 "agentic_trace": detail.get("agentic_trace", {}),
@@ -1498,7 +1502,7 @@ class ScenarioTestRunner:
 
             # Stage 2: Run investigation
             run_data = self.run_investigation(transaction_id)
-            run_id = run_data["run_id"]
+            run_id = run_data["investigation_id"]
 
             # Stage 3: Get investigation detail
             detail = self.get_investigation_detail(run_id)
@@ -1823,8 +1827,8 @@ def test_acceptance_kpi_gate(e2e_reporter: E2EReporter):
 
 
 @pytest.mark.e2e
-def test_llm_hybrid_mode(e2e_reporter: E2EReporter):
-    """Verify LLM hybrid mode is active when enabled."""
+def test_llm_agentic_mode(e2e_reporter: E2EReporter):
+    """Verify agentic mode is reported by investigations."""
     if e2e_reporter:
         e2e_reporter.begin_scenario("LLM Hybrid Mode Check")
     client = httpx.Client(base_url=BASE_URL, timeout=TIMEOUT)
@@ -1842,10 +1846,10 @@ def test_llm_hybrid_mode(e2e_reporter: E2EReporter):
                 "transaction_id": txn_id,
             },
             notes=(
-                ["[PASS] Using seeded transaction for LLM hybrid check"]
+                ["[PASS] Using seeded transaction for agentic mode check"]
                 if txn_id
                 else [
-                    "[FAIL] Missing seeded transaction for LLM hybrid check; reseed scenarios first",
+                    "[FAIL] Missing seeded transaction for agentic mode check; reseed scenarios first",
                 ]
             ),
         )
@@ -1871,9 +1875,9 @@ def test_llm_hybrid_mode(e2e_reporter: E2EReporter):
         body = response.json()
         errors = body.get("errors", {})
         detail = body.get("detail", {})
-        run_id = (errors.get("run_id") if isinstance(errors, dict) else None) or (
-            detail.get("run_id") if isinstance(detail, dict) else None
-        )
+        run_id = (
+            errors.get("existing_investigation_id") if isinstance(errors, dict) else None
+        ) or (detail.get("existing_investigation_id") if isinstance(detail, dict) else None)
         if e2e_reporter:
             e2e_reporter.record_stage(
                 stage_name="Run Investigation (409 Conflict)",
@@ -1884,12 +1888,12 @@ def test_llm_hybrid_mode(e2e_reporter: E2EReporter):
                 request_body=run_request,
                 response_status=409,
                 response_body=body,
-                notes=["[PASS] Already investigated - reusing existing run_id"],
+                notes=["[PASS] Already investigated - reusing existing investigation_id"],
             )
     else:
         response.raise_for_status()
         data = response.json()
-        run_id = data.get("run_id")
+        run_id = data.get("investigation_id")
         if e2e_reporter:
             e2e_reporter.record_stage(
                 stage_name="Run Investigation",
@@ -1941,16 +1945,16 @@ def test_llm_hybrid_mode(e2e_reporter: E2EReporter):
     else:
         # If no run_id, skip with scenario recorded
         client.close()
-        raise AssertionError("Already investigated but no run_id in conflict response")
+        raise AssertionError("Already investigated but no investigation_id in conflict response")
 
     # Check model_mode
     model_mode = data.get("model_mode")
     print(f"\n[LLM] Model mode: {model_mode}")
 
-    # If OPS_AGENT_ENABLE_LLM_REASONING=true, should be "hybrid"
-    # If disabled, should be "deterministic"
+    # model_mode should be "agentic" for the LangGraph runtime
+    # LLM disablement affects reasoning path only, not model_mode
     # We don't fail on this, just log it
-    assert model_mode in ("hybrid", "deterministic"), f"Unknown model_mode: {model_mode}"
+    assert model_mode == "agentic", f"Unexpected model_mode: {model_mode}"
 
     if e2e_reporter:
         e2e_reporter.record_stage(
@@ -1973,7 +1977,7 @@ def test_end_to_end_acknowledge_flow(e2e_reporter: E2EReporter):
         e2e_reporter.begin_scenario("End-to-End Acknowledge Flow")
     client = httpx.Client(base_url=BASE_URL, timeout=TIMEOUT)
 
-    # Stage 1: Use deterministic seeded transaction
+    # Stage 1: Use stable seeded transaction
     txn_id = SEED_MANIFEST.get(FraudScenario.CARD_TESTING_PATTERN.value)
     if e2e_reporter:
         e2e_reporter.record_stage(
@@ -2014,9 +2018,9 @@ def test_end_to_end_acknowledge_flow(e2e_reporter: E2EReporter):
         body = response.json()
         errors = body.get("errors", {})
         detail = body.get("detail", {})
-        run_id = (errors.get("run_id") if isinstance(errors, dict) else None) or (
-            detail.get("run_id") if isinstance(detail, dict) else None
-        )
+        run_id = (
+            errors.get("existing_investigation_id") if isinstance(errors, dict) else None
+        ) or (detail.get("existing_investigation_id") if isinstance(detail, dict) else None)
         if e2e_reporter:
             e2e_reporter.record_stage(
                 stage_name="Run Investigation (409 Conflict)",
@@ -2027,14 +2031,16 @@ def test_end_to_end_acknowledge_flow(e2e_reporter: E2EReporter):
                 request_body=run_request,
                 response_status=409,
                 response_body=body,
-                notes=["[PASS] Already investigated - reusing existing run_id"],
+                notes=["[PASS] Already investigated - reusing existing investigation_id"],
             )
         if not run_id:
-            raise AssertionError("Already investigated but no run_id in conflict response")
+            raise AssertionError(
+                "Already investigated but no investigation_id in conflict response"
+            )
     else:
         response.raise_for_status()
         data = response.json()
-        run_id = data.get("run_id")
+        run_id = data.get("investigation_id")
         if e2e_reporter:
             e2e_reporter.record_stage(
                 stage_name="Run Investigation",

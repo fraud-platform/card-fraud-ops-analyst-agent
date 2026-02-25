@@ -6,7 +6,7 @@ This document establishes performance baselines for the Card Fraud Ops Analyst A
 
 | Metric | Baseline (P50) | Baseline (P95) | Max Threshold |
 |--------|---------------|----------------|---------------|
-| End-to-end investigation (deterministic) | < 200ms | < 500ms | 2s |
+| End-to-end investigation (agentic fallback path) | < 200ms | < 500ms | 2s |
 | End-to-end investigation (LLM) | < 60s | < 90s | 120s |
 | GET /investigations/{id} | < 20ms | < 50ms | 100ms |
 | GET /transactions/{id}/insights | < 15ms | < 30ms | 50ms |
@@ -51,7 +51,7 @@ WHERE trm.transaction_id = $1;
 
 ### 2. Pattern Analysis Stage
 
-**Purpose**: Detect fraud patterns using deterministic rules
+**Purpose**: Detect fraud patterns using rule-based analysis
 
 | Component | Baseline | Target | Max Threshold |
 |-----------|----------|--------|---------------|
@@ -118,14 +118,14 @@ VECTOR_MIN_SIMILARITY=0.3
 
 | Provider | Baseline | Target | Max Threshold |
 |----------|----------|--------|---------------|
-| Ollama (llama3.2, local) | < 30s | < 60s | 90s |
-| Anthropic Claude Sonnet (cloud) | < 20s | < 40s | 60s |
-| Deterministic fallback | < 50ms | < 100ms | 200ms |
+| Ollama Cloud (`gpt-oss:20b`) | < 20s | < 40s | 60s |
+| Ollama local (fallback environment only) | < 30s | < 60s | 90s |
+| Rule-sequence fallback | < 50ms | < 100ms | 200ms |
 
-**Total**: < 40s (P95) with cloud LLM, < 60s (P95) with Ollama
+**Total**: < 40s (P95) with Ollama Cloud, < 60s (P95) with local fallback environment
 
 **Optimization Notes**:
-- Retry logic: 3 retries with exponential backoff (1s, 2s, 4s)
+- Retry logic: bounded retries via `LLM_MAX_RETRIES` (default 1)
 - Timeout per request: 30s
 - JSON mode enabled for structured output
 - Prompt size limited to 4000 tokens
@@ -133,15 +133,15 @@ VECTOR_MIN_SIMILARITY=0.3
 
 **Fallback Behavior**:
 1. LLM timeout → retry with same provider
-2. LLM error → retry with fallback model (ollama/llama3.2)
-3. All retries failed → fall back to deterministic mode
+2. LLM error -> bounded retry (LLM_MAX_RETRIES)
+3. All retries failed → fall back to evidence-only mode
 
 **Configuration**:
 ```bash
-LLM_PROVIDER=anthropic/claude-sonnet-4-5-20250929
+LLM_PROVIDER=ollama/gpt-oss:20b
 LLM_TIMEOUT=30
-LLM_MAX_RETRIES=3
-LLM_FALLBACK_MODEL=ollama/llama3.2
+LLM_MAX_RETRIES=1
+LLM_BASE_URL=https://ollama.com
 LLM_MAX_PROMPT_TOKENS=4000
 ```
 
@@ -164,7 +164,7 @@ LLM_MAX_PROMPT_TOKENS=4000
 **Optimization Notes**:
 - Conflict matrix is O(n²) where n = evidence count (typically < 20)
 - Freshness weighting is O(n) with simple exponential decay
-- Explanation builder is deterministic text generation
+- Explanation builder is rule-based text synthesis
 
 **Configuration**:
 ```bash
@@ -279,7 +279,7 @@ pool_recycle = 1800     # Recycle connections after 30 minutes
 
 | Mode | Baseline (P95) | Target | Max Threshold |
 |------|---------------|--------|---------------|
-| Deterministic | < 300ms | < 500ms | 2s |
+| Fallback path | < 300ms | < 500ms | 2s |
 | LLM (Ollama) | < 60s | < 90s | 120s |
 | LLM (Cloud) | < 40s | < 60s | 90s |
 
@@ -287,13 +287,13 @@ pool_recycle = 1800     # Recycle connections after 30 minutes
 - Context build: ~50ms
 - Pattern analysis: ~35ms
 - Similarity search: ~150ms (with vector) or ~10ms (stub)
-- LLM reasoning: ~30s (Ollama) or ~20s (cloud) or ~100ms (deterministic)
+- LLM reasoning: ~30s (Ollama) or ~20s (cloud) or ~100ms (fallback path)
 - Recommendation generation: ~70ms
 - Persistence: ~60ms
 
 ---
 
-### GET /api/v1/ops-agent/investigations/{run_id}
+### GET /api/v1/ops-agent/investigations/{investigation_id}
 
 **Purpose**: Retrieve investigation details
 
@@ -363,7 +363,7 @@ LIMIT $1 OFFSET $2;
 
 | Metric | Warning | Critical | Duration |
 |--------|---------|----------|----------|
-| Deterministic P95 | > 1s | > 2s | 15 min |
+| Fallback path P95 | > 1s | > 2s | 15 min |
 | LLM P95 | > 120s | > 180s | 15 min |
 | Any stage P95 | > 2× baseline | > 5× baseline | 15 min |
 
@@ -405,13 +405,13 @@ LIMIT $1 OFFSET $2;
 **Scenario 1: Normal Load**
 - Requests per second: 10
 - Duration: 10 minutes
-- Expected P95 latency: < 500ms (deterministic)
+- Expected P95 latency: < 500ms (fallback path)
 - Error rate: < 1%
 
 **Scenario 2: Peak Load**
 - Requests per second: 50
 - Duration: 5 minutes
-- Expected P95 latency: < 2s (deterministic)
+- Expected P95 latency: < 2s (fallback path)
 - Error rate: < 2%
 
 **Scenario 3: Stress Test**

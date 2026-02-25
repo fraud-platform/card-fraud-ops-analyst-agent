@@ -1,501 +1,579 @@
-"""Investigation service - orchestrates the investigation pipeline."""
+"""Investigation service - orchestrates the LangGraph investigation graph."""
 
-import time
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import uuid
 from typing import Any
 
-from sqlalchemy.exc import IntegrityError
+import structlog
+from opentelemetry import trace
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.action_planner import build_action_plan
-from app.agents.pipeline import Pipeline
+from app.agent.graph import build_investigation_graph
+from app.agent.registry import ToolRegistry
+from app.agent.state import create_initial_state
+from app.clients.tm_client import TMClient
 from app.core.config import get_settings
-from app.core.errors import ConflictError, ValidationError
-from app.core.metrics import (
-    ops_agent_investigation_latency_seconds,
-    ops_agent_investigation_requests_total,
-    ops_agent_recommendations_generated_total,
-)
+from app.core.errors import ConflictError, NotFoundError
+from app.llm.provider import get_chat_model
+from app.persistence.audit_repository import AuditRepository
 from app.persistence.insight_repository import InsightRepository
+from app.persistence.investigation_repository import InvestigationRepository
 from app.persistence.recommendation_repository import RecommendationRepository
-from app.persistence.run_repository import RunRepository
-from app.utils.hashing import hash_summary_text
+from app.persistence.rule_draft_repository import RuleDraftRepository
+from app.persistence.state_store import PostgresStateStore
+from app.persistence.tool_log_repository import ToolLogRepository
+from app.utils.clock import utc_now
+
+logger = structlog.get_logger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
 class InvestigationService:
-    """Service for running investigations."""
+    """Thin service layer that invokes the LangGraph investigation graph."""
 
-    def __init__(self, session: AsyncSession):
-        self.session = session
-        self.run_repo = RunRepository(session)
-        self.insight_repo = InsightRepository(session)
-        self.recommendation_repo = RecommendationRepository(session)
-        self.pipeline = Pipeline(session)
+    def __init__(self, session: AsyncSession, settings: Any = None):
+        self._session = session
+        self._settings = settings or get_settings()
+        self._investigation_repo = InvestigationRepository(session)
+        self._state_store = PostgresStateStore(session)
+        self._tool_log_repo = ToolLogRepository(session)
+        self._insight_repo = InsightRepository(session)
+        self._recommendation_repo = RecommendationRepository(session)
+        self._rule_draft_repo = RuleDraftRepository(session)
+        self._audit_repo = AuditRepository(session)
+        self._tm_client = TMClient(config=self._settings.tm_client)
 
     async def run_investigation(
         self,
-        mode: str,
         transaction_id: str,
-        case_id: str | None = None,
+        mode: str = "FULL",
     ) -> dict[str, Any]:
-        """Run an investigation for a transaction."""
-        settings = get_settings()
+        """Run a complete fraud investigation."""
+        investigation_id = str(uuid.uuid7())
 
-        if not settings.features.enable_deterministic_pipeline:
-            raise ValidationError("Deterministic pipeline is not enabled")
-
-        runtime_feature_flags = self._runtime_feature_flags_snapshot(settings)
-        runtime_safeguards = self._runtime_safeguards_snapshot(
-            settings=settings, runtime_feature_flags=runtime_feature_flags
-        )
-
-        try:
-            run = await self.run_repo.create(
-                mode=mode,
-                transaction_id=transaction_id,
-                case_id=case_id,
-                runtime_feature_flags=runtime_feature_flags,
-                runtime_safeguards=runtime_safeguards,
-            )
-            # Persist early so long-running pipeline stages do not hold the
-            # initial run creation transaction open.
-            await self.session.commit()
-        except IntegrityError:
-            # Duplicate trigger_ref - investigation already exists for this transaction.
-            # Must rollback the session before any further queries (SQLAlchemy async
-            # sessions are in a FAILED state after an IntegrityError).
-            await self.session.rollback()
-            trigger_ref = f"transaction:{transaction_id}" + (f" case:{case_id}" if case_id else "")
-            existing = await self.run_repo.get_by_trigger_ref(trigger_ref)
-            if existing is None:
-                raise
+        existing = await self._investigation_repo.get_active_for_transaction(transaction_id)
+        if existing:
             raise ConflictError(
-                "Investigation already exists for this transaction",
-                details={"run_id": existing["run_id"], "status": existing["status"]},
-            ) from None
-
-        t0 = time.perf_counter()
-        try:
-            result = await self.pipeline.run(
-                run_id=run["run_id"],
-                mode=mode,
-                transaction_id=transaction_id,
-                case_id=case_id,
+                f"Investigation already in progress for transaction {transaction_id}",
+                details={"existing_investigation_id": existing["id"]},
             )
-        except Exception:
-            elapsed = time.perf_counter() - t0
-            ops_agent_investigation_requests_total.labels(mode=mode, status="error").inc()
-            ops_agent_investigation_latency_seconds.labels(mode=mode).observe(elapsed)
-            raise
 
-        elapsed = time.perf_counter() - t0
-        ops_agent_investigation_requests_total.labels(mode=mode, status="success").inc()
-        ops_agent_investigation_latency_seconds.labels(mode=mode).observe(elapsed)
-
-        severity = (result.get("insight") or {}).get("severity", "UNKNOWN")
-        for rec in result.get("recommendations", []):
-            ops_agent_recommendations_generated_total.labels(
-                type=rec.get("type", "unknown"),
-                severity=severity,
-            ).inc()
-
-        return result
-
-    async def get_investigation(self, run_id: str) -> dict[str, Any] | None:
-        """Get investigation by run ID with insights and recommendations."""
-        run = await self.run_repo.get(run_id)
-        if run is None:
-            return None
-
-        # Parse transaction_id from trigger_ref ("transaction:<id>" or "transaction:<id> case:<id>")
-        trigger_ref = run.get("trigger_ref", "")
-        transaction_id = ""
-        case_id = None
-        for part in trigger_ref.split():
-            if part.startswith("transaction:"):
-                transaction_id = part[len("transaction:") :]
-            elif part.startswith("case:"):
-                case_id = part[len("case:") :]
-
-        result: dict[str, Any] = {
-            "run_id": run["run_id"],
-            "status": run["status"],
-            "mode": run["mode"],
-            "transaction_id": transaction_id,
-            "case_id": case_id,
-            "started_at": run["started_at"],
-            "completed_at": run.get("completed_at"),
-            "error_summary": run.get("error_summary"),
-            "model_mode": run.get("model_mode") or "deterministic",
-            "llm_status": run.get("llm_status"),
-            "llm_error": run.get("llm_error"),
-            "llm_model": run.get("llm_model"),
-            "duration_ms": run.get("duration_ms"),
-            "stage_durations": run.get("stage_durations") or {},
-            "runtime_feature_flags": self._coerce_bool_map(run.get("runtime_feature_flags")),
-            "runtime_safeguards": self._coerce_bool_map(run.get("runtime_safeguards")),
-            "evidence": [],
-            "recommendations": [],
-            "action_plan": [],
-            "evidence_gaps": [],
-        }
-
-        severity = "UNKNOWN"
-        if transaction_id and run["status"] == "SUCCESS":
-            insights = await self.insight_repo.get_insights_with_evidence(transaction_id)
-            if insights:
-                latest = insights[0]
-                result["insight"] = latest
-                result["evidence"] = list(latest.get("evidence", []))
-                result["model_mode"] = latest.get("model_mode", result["model_mode"])
-                severity = str(latest.get("severity") or "UNKNOWN")
-
-                # Fetch recommendations for this insight using indexed query.
-                result["recommendations"] = await self.recommendation_repo.list_by_insight_id(
-                    latest["insight_id"]
-                )
-
-        runtime_feature_flags = (
-            result["runtime_feature_flags"]
-            if isinstance(result["runtime_feature_flags"], dict)
-            else {}
+        await self._investigation_repo.create(
+            investigation_id=investigation_id,
+            transaction_id=transaction_id,
+            mode=mode,
+            planner_model=self._settings.planner.model_name,
+            max_steps=self._settings.langgraph.max_steps,
         )
-        vector_feature_enabled_default = bool(
-            runtime_feature_flags.get("vector_search_enabled", get_settings().vector_search.enabled)
+        await self._session.commit()
+
+        await self._audit_repo.emit(
+            entity_type="investigation",
+            entity_id=investigation_id,
+            action="CREATED",
+            performed_by="system",
+            new_value={"transaction_id": transaction_id, "mode": mode},
         )
 
-        context_snapshot, pattern_analysis, similarity_analysis = (
-            self._hydrate_stage_inputs_from_evidence(
-                result["evidence"],
-                stage_durations=result["stage_durations"],
-                vector_feature_enabled_default=vector_feature_enabled_default,
-            )
-        )
-        action_plan, evidence_gaps = build_action_plan(
-            recommendations=result["recommendations"],
-            context=context_snapshot,
-            pattern_analysis=pattern_analysis,
-            similarity_analysis=similarity_analysis,
-            evidence=result["evidence"],
-            severity=severity,
-            llm_status=str(result.get("llm_status") or ""),
-        )
-        result["action_plan"] = action_plan
-        result["evidence_gaps"] = evidence_gaps
-        result["agentic_trace"] = self._build_agentic_trace(
-            run=result,
-            recommendations=result["recommendations"],
-            evidence=result["evidence"],
-            runtime_feature_flags=runtime_feature_flags,
-            runtime_safeguards=(
-                result["runtime_safeguards"]
-                if isinstance(result["runtime_safeguards"], dict)
-                else {}
-            ),
-        )
+        graph = await self._build_graph()
 
-        return result
-
-    @staticmethod
-    def _build_agentic_trace(
-        *,
-        run: dict[str, Any],
-        recommendations: list[dict[str, Any]],
-        evidence: list[dict[str, Any]],
-        runtime_feature_flags: dict[str, bool],
-        runtime_safeguards: dict[str, bool],
-    ) -> dict[str, Any]:
-        stage_durations = run.get("stage_durations")
-        durations = stage_durations if isinstance(stage_durations, dict) else {}
-
-        llm_latency_ms: float | None = None
-        llm_reasoning_hash: str | None = None
-        for rec in recommendations:
-            if not isinstance(rec, dict):
-                continue
-            payload = rec.get("payload")
-            if not isinstance(payload, dict):
-                continue
-            latency = payload.get("llm_latency_ms")
-            if llm_latency_ms is None and isinstance(latency, (int, float)):
-                llm_latency_ms = round(float(latency), 1)
-            hash_value = payload.get("llm_reasoning_hash")
-            if llm_reasoning_hash is None and isinstance(hash_value, str) and hash_value:
-                llm_reasoning_hash = hash_value
-            if llm_latency_ms is not None and llm_reasoning_hash is not None:
-                break
-
-        if llm_reasoning_hash is None:
-            llm_reasoning_hash = InvestigationService._hash_summary_for_audit(run)
-
-        vector_count = 0
-        attribute_count = 0
-        for item in evidence:
-            if not isinstance(item, dict):
-                continue
-            payload = item.get("evidence_payload")
-            if not isinstance(payload, dict):
-                continue
-            evidence_kind = str(
-                item.get("evidence_kind") or payload.get("evidence_kind") or ""
-            ).lower()
-            if evidence_kind != "similarity":
-                continue
-            supporting_data = (
-                payload.get("supporting_data")
-                if isinstance(payload.get("supporting_data"), dict)
-                else {}
-            )
-            match_type = str(
-                supporting_data.get("match_type") or payload.get("category") or ""
-            ).lower()
-            if match_type == "vector":
-                vector_count += 1
-                continue
-            if match_type == "attribute":
-                attribute_count += 1
-                continue
-
-            # Backward-compatible fallback for legacy payload shape.
-            metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
-            source = str(metadata.get("source", "")).lower()
-            if source == "vector":
-                vector_count += 1
-            elif source == "attribute":
-                attribute_count += 1
-
-        has_similarity_stage = "similarity_analysis" in durations
-        vector_feature_enabled = bool(runtime_feature_flags.get("vector_search_enabled", False))
-        vector_stage_executed = bool(vector_feature_enabled and has_similarity_stage)
-        has_llm_stage = "llm_reasoning" in durations
-        llm_status = str(run.get("llm_status") or "unknown")
-        llm_feature_enabled = bool(runtime_feature_flags.get("enable_llm_reasoning", False))
-        if llm_status == "disabled":
-            llm_stage_status = "disabled"
-        elif llm_status in {"fallback", "failed"}:
-            llm_stage_status = "fallback"
-        else:
-            llm_stage_status = "success" if has_llm_stage else "skipped"
-
-        return {
-            "run_id": run.get("run_id"),
-            "model_mode": run.get("model_mode") or "deterministic",
-            "llm_status": run.get("llm_status"),
-            "llm_model": run.get("llm_model"),
-            "llm_error": run.get("llm_error"),
-            "llm_latency_ms": llm_latency_ms,
-            "llm_reasoning_hash": llm_reasoning_hash,
-            "stage_durations": durations,
-            "stages": {
-                "context_build": {
-                    "enabled": True,
-                    "status": "success" if "context_build" in durations else "skipped",
-                    "duration_ms": durations.get("context_build"),
-                    "metadata": {},
-                },
-                "pattern_analysis": {
-                    "enabled": True,
-                    "status": "success" if "pattern_analysis" in durations else "skipped",
-                    "duration_ms": durations.get("pattern_analysis"),
-                    "metadata": {},
-                },
-                "similarity_analysis": {
-                    "enabled": True,
-                    "status": "success" if has_similarity_stage else "skipped",
-                    "duration_ms": durations.get("similarity_analysis"),
-                    "metadata": {
-                        "vector_feature_enabled": vector_feature_enabled,
-                        "vector_stage_executed": vector_stage_executed,
-                        "vector_match_count": vector_count,
-                        "attribute_match_count": attribute_count,
-                    },
-                },
-                "llm_reasoning": {
-                    "enabled": llm_feature_enabled,
-                    "status": llm_stage_status,
-                    "duration_ms": durations.get("llm_reasoning"),
-                    "metadata": {
-                        "model": run.get("llm_model"),
-                        "error": run.get("llm_error"),
-                    },
-                },
-                "recommendations": {
-                    "enabled": True,
-                    "status": "success" if "recommendations" in durations else "skipped",
-                    "duration_ms": durations.get("recommendations"),
-                    "metadata": {"count": len(recommendations)},
-                },
+        initial_state = create_initial_state(
+            investigation_id=investigation_id,
+            transaction_id=transaction_id,
+            max_steps=self._settings.langgraph.max_steps,
+            feature_flags={
+                "planner_llm_enabled": self._settings.planner.llm_enabled,
+                "reasoning_llm_enabled": self._settings.features.enable_llm_reasoning,
+                "vector_search_enabled": self._settings.vector_search.enabled,
             },
-            "feature_flags": runtime_feature_flags,
-            "safeguards": runtime_safeguards,
-        }
+            safeguards={
+                "max_steps": self._settings.langgraph.max_steps,
+                "investigation_timeout_seconds": (
+                    self._settings.langgraph.investigation_timeout_seconds
+                ),
+                "tool_timeout_seconds": self._settings.langgraph.tool_timeout_seconds,
+            },
+        )
+
+        await self._investigation_repo.update_status(investigation_id, "IN_PROGRESS")
+        await self._session.commit()
+
+        await self._audit_repo.emit(
+            entity_type="investigation",
+            entity_id=investigation_id,
+            action="STARTED",
+            performed_by="system",
+            new_value={"status": "IN_PROGRESS"},
+        )
+
+        try:
+            async with asyncio.timeout(self._settings.langgraph.investigation_timeout_seconds):
+                with tracer.start_as_current_span("investigation.run") as span:
+                    span.set_attribute("investigation_id", investigation_id)
+                    span.set_attribute("transaction_id", transaction_id)
+                    span.set_attribute("mode", mode)
+                    result = await graph.ainvoke(initial_state)
+                    span.set_attribute("status", result.get("status", "COMPLETED"))
+                    span.set_attribute("severity", result.get("severity", "LOW"))
+                    span.set_attribute("step_count", result.get("step_count", 0))
+        except TimeoutError:
+            result = {
+                **initial_state,
+                "status": "TIMED_OUT",
+                "error": "Investigation timed out",
+            }
+        except Exception as exc:
+            logger.error(
+                "Investigation failed with unexpected error",
+                investigation_id=investigation_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            result = {
+                **initial_state,
+                "status": "FAILED",
+                "error": str(exc),
+            }
+
+        await self._complete_investigation(investigation_id, result)
+
+        await self._persist_results(result)
+        await self._session.commit()
+
+        await self._audit_repo.emit(
+            entity_type="investigation",
+            entity_id=investigation_id,
+            action="COMPLETED",
+            performed_by="system",
+            new_value={
+                "status": result.get("status", "COMPLETED"),
+                "severity": result.get("severity", "LOW"),
+                "confidence_score": result.get("confidence_score", 0.0),
+                "step_count": result.get("step_count", 0),
+            },
+        )
+
+        return result
+
+    async def get_investigation(self, investigation_id: str) -> dict[str, Any]:
+        """Get full investigation detail."""
+        investigation = await self._investigation_repo.get(investigation_id)
+        if investigation is None:
+            raise NotFoundError(f"Investigation {investigation_id} not found")
+
+        state = await self._state_store.load_state(investigation_id)
+        logged_executions = await self._tool_log_repo.get_executions(investigation_id)
+
+        if state is None:
+            # State not persisted (e.g. failed before first tool ran).
+            # Return a response-compatible dict using DB row fields.
+            return {
+                "investigation_id": investigation.get("id", investigation_id),
+                "transaction_id": investigation.get("transaction_id", ""),
+                "status": investigation.get("status", "UNKNOWN"),
+                "severity": investigation.get("severity", "LOW"),
+                "confidence_score": float(investigation.get("final_confidence") or 0.0),
+                "step_count": investigation.get("step_count", 0),
+                "max_steps": investigation.get("max_steps", 20),
+                "planner_decisions": [],
+                "tool_executions": self._normalize_tool_executions(logged_executions),
+                "recommendations": [],
+                "started_at": str(investigation.get("started_at", "")),
+                "completed_at": investigation.get("completed_at"),
+                "total_duration_ms": None,
+                "context": {},
+                "evidence": [],
+                "pattern_results": {},
+                "similarity_results": {},
+                "reasoning": {},
+                "hypotheses": [],
+                "rule_draft": None,
+            }
+
+        merged = {**investigation, **state}
+        state_executions = self._normalize_tool_executions(merged.get("tool_executions", []))
+        if state_executions and self._has_rich_tool_io(state_executions):
+            merged["tool_executions"] = state_executions
+            return merged
+
+        logged_normalized = self._normalize_tool_executions(logged_executions)
+        if logged_normalized and self._has_rich_tool_io(logged_normalized):
+            merged["tool_executions"] = logged_normalized
+        else:
+            merged["tool_executions"] = state_executions
+        return merged
+
+    async def resume_investigation(self, investigation_id: str) -> dict[str, Any]:
+        """Resume a failed or interrupted investigation."""
+        state = await self._state_store.load_state(investigation_id)
+        if state is None:
+            raise NotFoundError(f"No state found for investigation {investigation_id}")
+
+        graph = await self._build_graph()
+
+        await self._audit_repo.emit(
+            entity_type="investigation",
+            entity_id=investigation_id,
+            action="RESUMED",
+            performed_by="system",
+            new_value={"status": "IN_PROGRESS"},
+        )
+
+        try:
+            async with asyncio.timeout(self._settings.langgraph.investigation_timeout_seconds):
+                result = await graph.ainvoke(state)
+        except TimeoutError:
+            result = {
+                **state,
+                "status": "TIMED_OUT",
+                "error": "Resume timed out",
+            }
+        except Exception as exc:
+            logger.error(
+                "Resume failed with unexpected error",
+                investigation_id=investigation_id,
+                error=str(exc),
+                exc_info=True,
+            )
+            result = {
+                **state,
+                "status": "FAILED",
+                "error": str(exc),
+            }
+
+        await self._complete_investigation(investigation_id, result)
+
+        await self._persist_results(result)
+        await self._session.commit()
+
+        await self._audit_repo.emit(
+            entity_type="investigation",
+            entity_id=investigation_id,
+            action="COMPLETED",
+            performed_by="system",
+            new_value={
+                "status": result.get("status", "COMPLETED"),
+                "severity": result.get("severity", "LOW"),
+                "confidence_score": result.get("confidence_score", 0.0),
+            },
+        )
+
+        return result
+
+    async def _complete_investigation(
+        self,
+        investigation_id: str,
+        result: dict[str, Any],
+    ) -> None:
+        """Persist the final investigation status with rollback-retry.
+
+        A failed tool's DB call may leave the session in a failed-transaction
+        state. We roll back once and retry. If the retry also fails we force
+        status=FAILED so the investigation never stays stuck in IN_PROGRESS.
+        """
+        kwargs = dict(
+            investigation_id=investigation_id,
+            status=result.get("status", "COMPLETED"),
+            severity=result.get("severity", "LOW"),
+            final_confidence=result.get("confidence_score", 0.0),
+            step_count=result.get("step_count", 0),
+        )
+        try:
+            await self._investigation_repo.complete(**kwargs)
+        except Exception as exc:
+            logger.warning(
+                "complete() failed; rolling back and retrying",
+                investigation_id=investigation_id,
+                error=str(exc),
+            )
+            await self._session.rollback()
+            try:
+                await self._investigation_repo.complete(**kwargs)
+            except Exception as exc2:
+                logger.error(
+                    "complete() failed on retry; marking investigation FAILED",
+                    investigation_id=investigation_id,
+                    error=str(exc2),
+                )
+                await self._session.rollback()
+                await self._investigation_repo.update_status(
+                    investigation_id=investigation_id,
+                    status="FAILED",
+                )
+        await self._session.commit()
+
+    async def _persist_results(self, state: dict[str, Any]) -> None:
+        """Persist tool logs, insights, recommendations, and rule drafts after graph completion."""
+        investigation_id = state.get("investigation_id", "")
+        transaction_id = state.get("transaction_id", "")
+
+        tool_executions = state.get("tool_executions", [])
+        for idx, exec_record in enumerate(tool_executions):
+            try:
+                await self._tool_log_repo.log_execution(
+                    investigation_id=investigation_id,
+                    tool_name=exec_record.get("tool_name", "unknown"),
+                    step_number=idx + 1,
+                    input_summary=exec_record.get("input_summary", {}),
+                    output_summary=exec_record.get("output_summary", {}),
+                    execution_time_ms=exec_record.get("execution_time_ms", 0),
+                    status=exec_record.get("status", "SUCCESS"),
+                    error_message=exec_record.get("error_message"),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to persist tool execution log",
+                    investigation_id=investigation_id,
+                    tool_name=exec_record.get("tool_name"),
+                    error=str(exc),
+                )
+
+        reasoning = state.get("reasoning", {})
+        evidence = state.get("evidence", [])
+        severity = state.get("severity", "LOW")
+        # Runtime is always agentic; LLM enablement only changes reasoning path within the graph.
+        model_mode = "agentic"
+        insight_id = ""
+
+        if reasoning or evidence:
+            try:
+                summary = self._build_insight_summary(reasoning, evidence)
+                if not summary and evidence:
+                    summary = f"Found {len(evidence)} pieces of evidence"
+
+                idempotency_key = self._compute_insight_key(
+                    transaction_id=transaction_id,
+                    insight_type="agentic_investigation",
+                    model_mode=model_mode,
+                )
+
+                insight = await self._insight_repo.upsert_insight(
+                    transaction_id=transaction_id,
+                    severity=severity,
+                    summary=summary,
+                    insight_type="agentic_investigation",
+                    model_mode=model_mode,
+                    idempotency_key=idempotency_key,
+                )
+
+                insight_id = insight.get("insight_id", "")
+                for ev in evidence:
+                    try:
+                        evidence_kind, evidence_payload = self._normalize_evidence_item(ev)
+                        await self._insight_repo.add_evidence(
+                            insight_id=insight_id,
+                            evidence_kind=evidence_kind,
+                            evidence_payload=evidence_payload,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to add evidence to insight",
+                            insight_id=insight_id,
+                            error=str(exc),
+                        )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to persist insight",
+                    investigation_id=investigation_id,
+                    error=str(exc),
+                )
+
+        recommendations = state.get("recommendations", [])
+        for rec in recommendations:
+            try:
+                rec_type = rec.get("type", "REVIEW")
+                rec_payload = rec.get("payload", {})
+                rec_title = rec.get("title", "Generated recommendation")
+                rec_impact = rec.get("impact", "Review recommended")
+
+                idempotency_key = self._compute_recommendation_key(
+                    investigation_id=investigation_id,
+                    rec_type=rec_type,
+                    payload_hash=hashlib.sha256(str(rec_payload).encode()).hexdigest()[:16],
+                )
+
+                await self._recommendation_repo.upsert_recommendation(
+                    insight_id=insight_id,
+                    recommendation_type=rec_type,
+                    payload=rec_payload,
+                    idempotency_key=idempotency_key,
+                    title=rec_title,
+                    impact=rec_impact,
+                    investigation_id=investigation_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to persist recommendation",
+                    investigation_id=investigation_id,
+                    error=str(exc),
+                )
+
+        rule_draft = state.get("rule_draft")
+        if rule_draft:
+            try:
+                await self._rule_draft_repo.create(
+                    investigation_id=investigation_id,
+                    rule_name=rule_draft.get("rule_name", "Draft Rule"),
+                    rule_description=rule_draft.get("rule_description", ""),
+                    conditions=rule_draft.get("conditions", []),
+                    thresholds=rule_draft.get("thresholds", {}),
+                    metadata=rule_draft.get("metadata"),
+                    recommendation_id=rule_draft.get("recommendation_id"),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to persist rule draft",
+                    investigation_id=investigation_id,
+                    error=str(exc),
+                )
 
     @staticmethod
-    def _hash_summary_for_audit(run: dict[str, Any]) -> str | None:
-        insight = run.get("insight")
-        if not isinstance(insight, dict):
-            return None
-        summary = str(insight.get("summary", "")).strip()
-        return hash_summary_text(summary)
+    def _build_insight_summary(reasoning: Any, evidence: list[Any]) -> str:
+        """Build stable summary text from current agentic reasoning/evidence shapes."""
+        reasoning_dict = reasoning if isinstance(reasoning, dict) else {}
+        for key in ("summary", "narrative"):
+            value = reasoning_dict.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        findings = reasoning_dict.get("key_findings")
+        if isinstance(findings, list):
+            rendered = [str(item).strip() for item in findings if str(item).strip()]
+            if rendered:
+                return "; ".join(rendered[:3])
+        if evidence:
+            return f"Found {len(evidence)} pieces of evidence"
+        return "Investigation completed"
 
     @staticmethod
-    def _hydrate_stage_inputs_from_evidence(
-        evidence: list[dict[str, Any]],
-        *,
-        stage_durations: dict[str, Any] | None = None,
-        vector_feature_enabled_default: bool,
-    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-        """Reconstruct stage payloads from persisted evidence for detail-time action plans."""
-        context_snapshot: dict[str, Any] = {}
-        patterns: list[dict[str, Any]] = []
-        similarity_matches: list[dict[str, Any]] = []
-        vector_match_count = 0
-        attribute_match_count = 0
+    def _normalize_evidence_item(evidence_item: Any) -> tuple[str, dict[str, Any]]:
+        """Normalize mixed evidence shapes into repository contract."""
+        if not isinstance(evidence_item, dict):
+            return "unknown", {}
 
-        for item in evidence:
+        evidence_kind = str(
+            evidence_item.get("kind")
+            or evidence_item.get("evidence_kind")
+            or evidence_item.get("category")
+            or evidence_item.get("tool")
+            or "unknown"
+        )
+
+        payload = evidence_item.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
+
+        supporting = evidence_item.get("data")
+        if isinstance(supporting, dict) and supporting:
+            payload = {**payload, "supporting_data": supporting}
+
+        for key in ("category", "description", "tool"):
+            value = evidence_item.get(key)
+            if value is not None and key not in payload:
+                payload[key] = value
+
+        return evidence_kind, payload
+
+    @staticmethod
+    def _compute_insight_key(
+        transaction_id: str,
+        insight_type: str,
+        model_mode: str,
+    ) -> str:
+        """Compute idempotency key for insight."""
+        now = utc_now()
+        components = [
+            str(transaction_id),
+            str(insight_type),
+            str(model_mode),
+            now.strftime("%Y-%m-%d"),
+        ]
+        raw = "|".join(components)
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    @staticmethod
+    def _compute_recommendation_key(
+        investigation_id: str,
+        rec_type: str,
+        payload_hash: str,
+    ) -> str:
+        """Compute idempotency key for recommendation."""
+        components = [str(investigation_id), str(rec_type), str(payload_hash)]
+        raw = "|".join(components)
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    @staticmethod
+    def _normalize_tool_executions(executions: Any) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        if not isinstance(executions, list):
+            return normalized
+        for item in executions:
             if not isinstance(item, dict):
                 continue
-            payload = item.get("evidence_payload")
-            if not isinstance(payload, dict):
-                continue
-
-            evidence_kind = str(
-                item.get("evidence_kind") or payload.get("evidence_kind") or ""
-            ).lower()
-            supporting_data = (
-                payload.get("supporting_data")
-                if isinstance(payload.get("supporting_data"), dict)
-                else {}
-            )
-
-            if evidence_kind == "context_snapshot":
-                if supporting_data:
-                    context_snapshot = dict(supporting_data)
-                continue
-
-            if evidence_kind == "pattern":
-                pattern_name = str(
-                    payload.get("category") or supporting_data.get("pattern_name") or ""
-                ).strip()
-                if not pattern_name:
-                    continue
-                details = supporting_data.get("details")
-                patterns.append(
-                    {
-                        "pattern_name": pattern_name,
-                        "score": InvestigationService._coerce_float(payload.get("strength")),
-                        "details": details if isinstance(details, dict) else {},
-                    }
-                )
-                continue
-
-            if evidence_kind != "similarity":
-                continue
-
-            details = supporting_data.get("details")
-            match_type = str(
-                supporting_data.get("match_type") or payload.get("category") or "unknown"
-            )
-            similarity_score = InvestigationService._coerce_float(
-                supporting_data.get("similarity_score"),
-                default=InvestigationService._coerce_float(payload.get("strength")),
-            )
-            similarity_matches.append(
+            normalized.append(
                 {
-                    "match_id": str(supporting_data.get("match_id") or ""),
-                    "match_type": match_type,
-                    "similarity_score": similarity_score,
-                    "details": details if isinstance(details, dict) else {},
-                    "counter_evidence": supporting_data.get("counter_evidence"),
+                    "tool_name": item.get("tool_name", "unknown"),
+                    "input_summary": item.get("input_summary")
+                    if isinstance(item.get("input_summary"), dict)
+                    else {},
+                    "output_summary": item.get("output_summary")
+                    if isinstance(item.get("output_summary"), dict)
+                    else {},
+                    "execution_time_ms": int(item.get("execution_time_ms", 0) or 0),
+                    "status": item.get("status", "UNKNOWN"),
+                    "error_message": item.get("error_message"),
+                    "timestamp": item.get("timestamp") or item.get("created_at") or "",
                 }
             )
-            normalized_match_type = match_type.lower()
-            if normalized_match_type == "vector":
-                vector_match_count += 1
-            elif normalized_match_type == "attribute":
-                attribute_match_count += 1
+        return normalized
 
-        sorted_scores = sorted(
-            (
-                InvestigationService._coerce_float(match.get("similarity_score"))
-                for match in similarity_matches
-            ),
-            reverse=True,
+    @staticmethod
+    def _has_rich_tool_io(executions: list[dict[str, Any]]) -> bool:
+        if not executions:
+            return False
+        for item in executions:
+            input_summary = item.get("input_summary")
+            output_summary = item.get("output_summary")
+            if isinstance(input_summary, dict) and isinstance(output_summary, dict):
+                if input_summary or output_summary:
+                    return True
+        return False
+
+    async def _build_graph(self):
+        """Build the investigation graph with all dependencies."""
+        from app.clients.embedding_client import EmbeddingClient
+
+        llm = get_chat_model(self._settings)
+        registry = ToolRegistry()
+
+        from app.tools.context_tool import ContextTool
+        from app.tools.pattern_tool import PatternTool
+        from app.tools.reasoning_tool import ReasoningTool
+        from app.tools.recommendation_tool import RecommendationTool
+        from app.tools.rule_draft_tool import RuleDraftTool
+        from app.tools.similarity_tool import SimilarityTool
+
+        registry.register(ContextTool(tm_client=self._tm_client))
+        registry.register(PatternTool())
+        registry.register(
+            SimilarityTool(
+                embedding_client=EmbeddingClient(self._settings),
+                session=self._session,
+            )
         )
-        top_scores = sorted_scores[:5]
-        overall_score = sum(top_scores) / len(top_scores) if top_scores else 0.0
-        duration_map = stage_durations if isinstance(stage_durations, dict) else {}
-        pattern_analysis = {"patterns": patterns}
-        similarity_analysis = {
-            "matches": similarity_matches,
-            "overall_score": round(overall_score, 6),
-            "vector_match_count": vector_match_count,
-            "attribute_match_count": attribute_match_count,
-            "vector_feature_enabled": bool(vector_feature_enabled_default),
-            "vector_stage_executed": bool(
-                vector_feature_enabled_default and "similarity_analysis" in duration_map
-            ),
-        }
-        return context_snapshot, pattern_analysis, similarity_analysis
+        registry.register(ReasoningTool(llm=llm, settings=self._settings))
+        registry.register(RecommendationTool())
+        registry.register(RuleDraftTool())
 
-    @staticmethod
-    def _coerce_bool_map(value: Any) -> dict[str, bool]:
-        if not isinstance(value, dict):
-            return {}
-        parsed: dict[str, bool] = {}
-        for key, flag in value.items():
-            if isinstance(flag, bool):
-                parsed[str(key)] = flag
-                continue
-            if isinstance(flag, str):
-                parsed[str(key)] = flag.strip().lower() in {"1", "true", "yes", "on"}
-                continue
-            parsed[str(key)] = bool(flag)
-        return parsed
-
-    @staticmethod
-    def _runtime_feature_flags_snapshot(settings: Any) -> dict[str, bool]:
-        return {
-            "enable_deterministic_pipeline": bool(settings.features.enable_deterministic_pipeline),
-            "enable_llm_reasoning": bool(settings.features.enable_llm_reasoning),
-            "vector_search_enabled": bool(settings.vector_search.enabled),
-            "counter_evidence_enabled": bool(settings.features.counter_evidence_enabled),
-            "conflict_matrix_enabled": bool(settings.features.conflict_matrix_enabled),
-            "explanation_builder_enabled": bool(settings.features.explanation_builder_enabled),
-            "enable_rule_draft_export": bool(settings.features.enable_rule_draft_export),
-            "enforce_human_approval": bool(settings.features.enforce_human_approval),
-        }
-
-    @staticmethod
-    def _runtime_safeguards_snapshot(
-        *, settings: Any, runtime_feature_flags: dict[str, bool]
-    ) -> dict[str, bool]:
-        vector_enabled = bool(runtime_feature_flags.get("vector_search_enabled", False))
-        llm_enabled = bool(runtime_feature_flags.get("enable_llm_reasoning", False))
-        return {
-            "human_approval_enforced": bool(runtime_feature_flags.get("enforce_human_approval")),
-            "prompt_guard_enabled": bool(settings.llm.prompt_guard_enabled),
-            "consistency_check_enabled": llm_enabled,
-            "vector_fail_closed": vector_enabled,
-        }
-
-    @staticmethod
-    def _coerce_float(value: Any, default: float = 0.0) -> float:
-        try:
-            return float(value)
-        except TypeError, ValueError:
-            return default
-
-    @staticmethod
-    def _build_action_plan(
-        *,
-        recommendations: list[dict[str, Any]],
-        evidence: list[dict[str, Any]],
-        severity: str,
-        llm_status: str,
-    ) -> tuple[list[dict[str, Any]], list[str]]:
-        return build_action_plan(
-            recommendations=recommendations,
-            severity=severity,
-            llm_status=llm_status,
-            evidence=evidence,
+        return build_investigation_graph(
+            registry=registry,
+            llm=llm,
+            settings=self._settings,
+            state_store=self._state_store,
         )
+
+    async def close(self) -> None:
+        """Close resources."""
+        await self._tm_client.close()

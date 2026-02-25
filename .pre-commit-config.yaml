@@ -1,86 +1,49 @@
 # Pre-commit hooks for card-fraud-ops-analyst-agent
-# Enforces quality gates before allowing commits
-# Install: uv run pre-commit install
-# Run manually: uv run pre-commit run --all-files
+# Install with both hook types:
+#   uv run pre-commit install --hook-type pre-commit --hook-type pre-push
+# Run manually:
+#   uv run pre-commit run --all-files
+#   uv run pre-commit run --all-files --hook-stage pre-push
 
 default_language_version:
   python: python3.14
 
 repos:
-  # Ruff - fast Python linter and formatter
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.1
-    hooks:
-      # Lint - fail on errors
-      - id: ruff
-        name: ruff check (lint)
-        args: [--fix, --exit-non-zero-on-fix]
-        types: [python]
-        files: ^(app|tests|cli|scripts)/
-
-      # Format - fail if not formatted
-      - id: ruff-format
-        name: ruff format (check formatting)
-        args: [--check]
-        types: [python]
-        files: ^(app|tests|cli|scripts)/
-
-  # General whitespace and file ending fixes
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
-      # Trim trailing whitespace
       - id: trailing-whitespace
-        name: Trim trailing whitespace
+        name: trim trailing whitespace
         exclude: ^(tests/fixtures/|\.min\.js$)
-
-      # Ensure files end with newline
       - id: end-of-file-fixer
-        name: Fix end of files
-
-      # Check for large files (warn only)
+        name: fix end of files
       - id: check-added-large-files
-        name: Check for large files
+        name: check large files
         args: [--maxkb=500]
-
-      # Check for merge conflicts
+        exclude: ^docs/temporary-reports/
       - id: check-merge-conflict
-        name: Check for merge conflicts
-
-      # Check JSON files
+        name: check merge conflicts
       - id: check-json
-        name: Check JSON files
-
-      # Check YAML files
+        name: check json
       - id: check-yaml
-        name: Check YAML files
-
-      # Check TOML files
+        name: check yaml
       - id: check-toml
-        name: Check TOML files
+        name: check toml
 
-  # Unit tests - run on every commit (fast, no DB required)
-  # Markers auto-applied via conftest.py pytest_collection_modifyitems
-  # Uses .venv Python directly so no activation step is needed
   - repo: local
     hooks:
-      - id: pytest-unit
-        name: pytest (unit tests)
-        entry: uv run pytest
+      - id: quality-gates-core
+        name: quality gates (lint + format + unit + smoke)
+        entry: uv run python scripts/precommit_quality_gate.py --mode core
         language: system
-        args: [-m, unit, -q, --tb=short, --no-header]
         pass_filenames: false
         always_run: true
+        stages: [pre-commit]
 
-# CI: pre-commit.ci will auto-fix issues when PR is opened
-ci:
-  autofix_commit_msg: |
-    [pre-commit.ci] auto fixes from pre-commit hooks
-
-    for more information, see https://pre-commit.ci
-  autofix_prs: true
-  autoupdate_branch: ''
-  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
-  autoupdate_schedule: weekly
-  skip: []
-  submodules: false
+      - id: quality-gates-integration
+        name: quality gates (integration via doppler)
+        entry: uv run python scripts/precommit_quality_gate.py --mode integration
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

@@ -18,6 +18,19 @@ def _require_database_url() -> str:
     return to_asyncpg_url(database_url)
 
 
+REQUIRED_TABLES = {
+    "ops_agent_investigations",
+    "ops_agent_investigation_state",
+    "ops_agent_tool_execution_log",
+    "ops_agent_insights",
+    "ops_agent_evidence",
+    "ops_agent_recommendations",
+    "ops_agent_rule_drafts",
+    "ops_agent_audit_log",
+    "ops_agent_transaction_embeddings",
+}
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_database_connectivity() -> None:
@@ -38,24 +51,9 @@ async def test_ops_agent_tables_exist() -> None:
     """Verify all ops_agent_* tables exist in fraud_gov schema."""
     database_url = _require_database_url()
     engine = create_async_engine(database_url)
-    base_required_tables = {
-        "ops_agent_runs",
-        "ops_agent_insights",
-        "ops_agent_evidence",
-        "ops_agent_recommendations",
-        "ops_agent_rule_drafts",
-        "ops_agent_audit_log",
-    }
 
     try:
         async with engine.connect() as conn:
-            ext = await conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'vector'"))
-            vector_installed = ext.scalar() == 1
-
-            required_tables = set(base_required_tables)
-            if vector_installed:
-                required_tables.add("ops_agent_transaction_embeddings")
-
             query = text(
                 """
                 SELECT table_name
@@ -67,7 +65,86 @@ async def test_ops_agent_tables_exist() -> None:
             result = await conn.execute(query)
             existing = {row[0] for row in result.fetchall()}
 
-        missing = required_tables - existing
+        missing = REQUIRED_TABLES - existing
         assert not missing, f"Missing ops_agent tables: {sorted(missing)}"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ops_agent_investigations_columns() -> None:
+    """Verify ops_agent_investigations has required columns."""
+    database_url = _require_database_url()
+    engine = create_async_engine(database_url)
+
+    required_columns = {
+        "id",
+        "transaction_id",
+        "mode",
+        "status",
+        "priority",
+        "severity",
+        "final_confidence",
+        "step_count",
+        "max_steps",
+        "planner_model",
+        "started_at",
+        "completed_at",
+        "duration_ms",
+        "error",
+        "created_at",
+        "updated_at",
+    }
+
+    try:
+        async with engine.connect() as conn:
+            query = text(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'fraud_gov'
+                  AND table_name = 'ops_agent_investigations'
+                """
+            )
+            result = await conn.execute(query)
+            existing = {row[0] for row in result.fetchall()}
+
+        missing = required_columns - existing
+        assert not missing, f"Missing columns in ops_agent_investigations: {sorted(missing)}"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ops_agent_investigation_state_columns() -> None:
+    """Verify ops_agent_investigation_state has required columns."""
+    database_url = _require_database_url()
+    engine = create_async_engine(database_url)
+
+    required_columns = {
+        "investigation_id",
+        "state",
+        "version",
+        "created_at",
+        "updated_at",
+    }
+
+    try:
+        async with engine.connect() as conn:
+            query = text(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'fraud_gov'
+                  AND table_name = 'ops_agent_investigation_state'
+                """
+            )
+            result = await conn.execute(query)
+            existing = {row[0] for row in result.fetchall()}
+
+        missing = required_columns - existing
+        assert not missing, f"Missing columns in ops_agent_investigation_state: {sorted(missing)}"
     finally:
         await engine.dispose()

@@ -14,6 +14,14 @@ def setup_logging() -> None:
 
     log_level = settings.app.log_level.value
 
+    # Ensure stdout uses UTF-8 on Windows to prevent UnicodeEncodeError
+    # when log messages contain non-ASCII characters from API responses.
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,

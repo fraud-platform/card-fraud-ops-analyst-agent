@@ -1,92 +1,96 @@
-﻿# Ops Agent API Contract v1
+# Ops Agent API Contract v1
 
 ## Contract Status
 
-`v1 - Draft for freeze`
+`v1 - active`
 
-## Security
+## Base Path
+
+- Ops-agent routes: `/api/v1/ops-agent`
+- Health and metrics routes: `/api/v1`
+
+## Security Scopes
 
 | Endpoint | Required Scope |
 |---|---|
+| `GET /investigations` | `ops_agent:read` |
 | `POST /investigations/run` | `ops_agent:run` |
-| `GET /investigations/{run_id}` | `ops_agent:read` |
+| `GET /investigations/{investigation_id}` | `ops_agent:read` |
+| `GET /investigations/{investigation_id}/trace` | `ops_agent:read` |
+| `POST /investigations/{investigation_id}/resume` | `ops_agent:run` |
+| `GET /investigations/{investigation_id}/rule-draft` | `ops_agent:read` |
 | `GET /transactions/{transaction_id}/insights` | `ops_agent:read` |
 | `GET /worklist/recommendations` | `ops_agent:read` |
-| `POST /recommendations/{recommendation_id}/acknowledge` | `ops_agent:ack` |
-| `POST /rule-drafts` | `ops_agent:draft` |
-| `POST /rule-drafts/{rule_draft_id}/export` | `ops_agent:draft` |
+| `POST /worklist/recommendations/{recommendation_id}/acknowledge` | `ops_agent:ack` |
+| `GET /api/v1/metrics` | `X-Metrics-Token` header |
 
-## 1. Run Investigation
+## Endpoints
 
-### Request
+### 1. List Investigations
+
+`GET /api/v1/ops-agent/investigations?limit=50&offset=0&status=...&transaction_id=...`
+
+- Returns paged investigation summaries.
+
+### 2. Run Investigation
 
 `POST /api/v1/ops-agent/investigations/run`
 
 ```json
 {
   "mode": "quick",
-  "transaction_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
-  "case_id": null,
-  "include_rule_draft_preview": false
+  "transaction_id": "0f8fad5b-d9cb-469f-a165-70867728950e"
 }
 ```
 
-### Response
+- Starts an investigation and returns initial state.
 
-```json
-{
-  "run_id": "90c7a34f-52c1-4890-b495-4f6f21435f01",
-  "status": "SUCCESS",
-  "mode": "quick",
-  "transaction_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
-  "insight": {
-    "insight_id": "0d132e6b-47d3-48de-92d1-6d13a8877fb8",
-    "severity": "HIGH",
-    "summary": "Unusual cross-merchant burst with elevated decline ratio",
-    "generated_at": "2026-02-13T12:00:00Z"
-  },
-  "recommendations": [
-    {
-      "recommendation_id": "f2ce7b21-dff8-4f84-b638-c58d1f6a0878",
-      "type": "rule_candidate",
-      "status": "OPEN",
-      "priority": 1,
-      "payload": {
-        "title": "Consider velocity threshold refinement for merchant cluster",
-        "impact": "Expected to reduce repeat false negatives"
-      }
-    }
-  ]
-}
-```
+### 3. Get Investigation Detail
 
-## 2. Get Investigation
+`GET /api/v1/ops-agent/investigations/{investigation_id}`
 
-`GET /api/v1/ops-agent/investigations/{run_id}`
+- Returns full persisted investigation detail, including insights, recommendations, evidence, and agent trace metadata.
 
-- Returns full persisted run details including evidence blocks.
+### 4. Resume Investigation
 
-## 3. Get Latest Transaction Insights
+`POST /api/v1/ops-agent/investigations/{investigation_id}/resume`
+
+- Resumes interrupted or failed investigations.
+
+### 5. Get Investigation Rule Draft
+
+`GET /api/v1/ops-agent/investigations/{investigation_id}/rule-draft`
+
+- Returns associated rule draft when available.
+
+### 6. Get Investigation Trace
+
+`GET /api/v1/ops-agent/investigations/{investigation_id}/trace`
+
+- Returns self-contained HTML trace viewer (LangSmith-like experience).
+- Displays investigation steps, planner decisions, tool executions, LLM prompts/responses, evidence, and recommendations.
+- No external dependencies; all data embedded in HTML.
+
+### 7. Get Transaction Insights
 
 `GET /api/v1/ops-agent/transactions/{transaction_id}/insights`
 
-- Returns latest insight snapshots for transaction-centric portal panels.
+- Returns insight snapshots and evidence blocks for a transaction.
 
-## 4. Recommendation Worklist
+### 8. Recommendation Worklist
 
-`GET /api/v1/ops-agent/worklist/recommendations?status=OPEN&limit=50&cursor=...`
+`GET /api/v1/ops-agent/worklist/recommendations?limit=50&cursor=...&severity=...`
 
-- Keyset pagination.
-- Supports filters by severity, type, and owner.
+- Keyset-style pagination via cursor.
 
-## 5. Acknowledge Recommendation
+### 9. Acknowledge Recommendation
 
-`POST /api/v1/ops-agent/recommendations/{recommendation_id}/acknowledge`
+`POST /api/v1/ops-agent/worklist/recommendations/{recommendation_id}/acknowledge`
 
 ```json
 {
   "action": "ACKNOWLEDGED",
-  "comment": "Reviewed and moving to case investigation"
+  "comment": "Reviewed and actioned"
 }
 ```
 
@@ -94,33 +98,12 @@ Allowed `action` values:
 - `ACKNOWLEDGED`
 - `REJECTED`
 
-## 6. Create Rule Draft
+## Health and Monitoring
 
-`POST /api/v1/ops-agent/rule-drafts`
-
-```json
-{
-  "recommendation_id": "f2ce7b21-dff8-4f84-b638-c58d1f6a0878",
-  "package_version": "1.0",
-  "dry_run": true
-}
-```
-
-- Generates normalized rule draft package from recommendation evidence.
-- Does not activate or approve rules.
-
-## 7. Export Rule Draft
-
-`POST /api/v1/ops-agent/rule-drafts/{rule_draft_id}/export`
-
-```json
-{
-  "target": "rule-management",
-  "target_endpoint": "/api/v1/ops-agent-drafts/import"
-}
-```
-
-- Exports package for maker-checker flow in Rule Management.
+- `GET /api/v1/health`
+- `GET /api/v1/health/ready`
+- `GET /api/v1/health/live`
+- `GET /api/v1/metrics` (requires `X-Metrics-Token`)
 
 ## Error Codes
 

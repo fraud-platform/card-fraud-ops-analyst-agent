@@ -12,14 +12,18 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Agentic architecture tables (in dependency order for drops)
 OPS_AGENT_TABLES = [
-    "ops_agent_transaction_embeddings",
+    # Drop in reverse dependency order
+    "ops_agent_tool_execution_log",
+    "ops_agent_investigation_state",
     "ops_agent_audit_log",
     "ops_agent_rule_drafts",
     "ops_agent_recommendations",
     "ops_agent_evidence",
     "ops_agent_insights",
-    "ops_agent_runs",
+    "ops_agent_transaction_embeddings",
+    "ops_agent_investigations",
 ]
 
 

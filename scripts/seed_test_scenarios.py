@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
 import psycopg
 
 from app.core.config import to_libpq_url
@@ -41,6 +42,33 @@ DATABASE_URL = to_libpq_url(_DATABASE_URL)
 SEED_CONTEXT_MARKER = "ops-agent-e2e"
 SEED_CONTEXT_VERSION = "2026-02-17"
 SEED_MANIFEST_PATH = Path(os.getenv("E2E_SEED_MANIFEST", "htmlcov/e2e-seed-manifest.json"))
+VECTOR_ENABLED = os.getenv("VECTOR_ENABLED", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+VECTOR_API_BASE = os.getenv("VECTOR_API_BASE", "http://localhost:11434/api").rstrip("/")
+VECTOR_MODEL_NAME = os.getenv("VECTOR_MODEL_NAME", "mxbai-embed-large")
+VECTOR_API_KEY = os.getenv("VECTOR_API_KEY", os.getenv("OLLAMA_API_KEY", ""))
+MATRIX_SCENARIO_SELECTIONS: list[tuple[str, str, list[int]]] = [
+    ("fraud", "card_testing_pattern", [6, 5, 4, 3]),
+    ("fraud", "velocity_burst", [12, 11, 10, 9]),
+    ("fraud", "high_decline_ratio", [8, 7, 6]),
+    ("fraud", "cross_merchant_spread", [11, 10]),
+    ("likely_fraud", "likely_fraud", [6, 5]),
+    ("likely_fraud", "approved_likely_fraud", [5, 4]),
+    ("likely_fraud", "amount_round_number", [6]),
+    ("likely_fraud", "amount_high", [9]),
+    ("likely_fraud", "time_unusual_hour", [5]),
+    ("likely_fraud", "timezone_mismatch", [4]),
+    ("likely_fraud", "card_testing_sequence", [6]),
+    ("no_fraud", "legitimate", [6, 4, 3]),
+    ("no_fraud", "legitimate_counter_evidence", [5, 3, 1]),
+    ("no_fraud", "counter_evidence_extended", [3]),
+    ("no_fraud", "edge_first_transaction", [1]),
+    ("no_fraud", "edge_missing_data", [3]),
+]
 
 
 def generate_uuid7() -> str:
@@ -248,7 +276,11 @@ def annotate_scenario_transactions(
         )
 
 
-def write_seed_manifest(scenarios: dict[str, str]) -> None:
+def write_seed_manifest(
+    scenarios: dict[str, str],
+    *,
+    matrix_scenarios: dict[str, str] | None = None,
+) -> None:
     """Persist seeded target transaction IDs for deterministic E2E lookup."""
     payload = {
         "seed_marker": SEED_CONTEXT_MARKER,
@@ -256,9 +288,61 @@ def write_seed_manifest(scenarios: dict[str, str]) -> None:
         "generated_at": datetime.now(UTC).isoformat(),
         "scenarios": scenarios,
     }
+    if matrix_scenarios:
+        payload["matrix_scenarios"] = matrix_scenarios
     SEED_MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
     SEED_MANIFEST_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    print(f"[SEED] Wrote manifest: {SEED_MANIFEST_PATH}")
+    if matrix_scenarios:
+        print(
+            f"[SEED] Wrote manifest: {SEED_MANIFEST_PATH} "
+            f"(scenarios={len(scenarios)}, matrix_scenarios={len(matrix_scenarios)})"
+        )
+    else:
+        print(f"[SEED] Wrote manifest: {SEED_MANIFEST_PATH}")
+
+
+def build_matrix_manifest(conn: psycopg.Connection) -> dict[str, str]:
+    """Build 31-scenario matrix manifest from seeded transaction timeline rows."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                transaction_id::text,
+                transaction_context->>'seed_scenario' AS seed_scenario,
+                (transaction_context->>'seed_sequence')::integer AS seed_sequence
+            FROM fraud_gov.transactions
+            WHERE transaction_context->>'seed_marker' = %s
+            """,
+            [SEED_CONTEXT_MARKER],
+        )
+        rows = cur.fetchall()
+
+    lookup: dict[tuple[str, int], str] = {}
+    for transaction_id, scenario, sequence in rows:
+        if not transaction_id or not scenario or sequence is None:
+            continue
+        lookup[(str(scenario), int(sequence))] = str(transaction_id)
+
+    matrix_scenarios: dict[str, str] = {}
+    missing: list[str] = []
+    for bucket, scenario, sequences in MATRIX_SCENARIO_SELECTIONS:
+        for sequence in sequences:
+            key = f"{bucket}__{scenario}__seq_{sequence:02d}"
+            transaction_id = lookup.get((scenario, sequence))
+            if not transaction_id:
+                missing.append(key)
+                continue
+            matrix_scenarios[key] = transaction_id
+
+    if missing:
+        raise RuntimeError(
+            "Matrix manifest missing seeded transaction IDs: " + ", ".join(sorted(missing))
+        )
+    if len(matrix_scenarios) != 31:
+        raise RuntimeError(f"Matrix manifest expected 31 scenarios, got {len(matrix_scenarios)}")
+
+    print("[SEED] Matrix manifest generated with 31 detailed scenarios")
+    return matrix_scenarios
 
 
 def validate_seed_quality(conn: psycopg.Connection, scenarios: dict[str, str]) -> None:
@@ -422,6 +506,114 @@ def insert_rule_match(
                 True,
             ],
         )
+
+
+def _build_embedding_text(row: dict[str, Any]) -> str:
+    amount = row.get("transaction_amount", 0)
+    merchant_id = row.get("merchant_id", "unknown")
+    currency = row.get("transaction_currency", "USD")
+    return f"amount: {amount} | merchant: {merchant_id} | currency: {currency}"
+
+
+def seed_transaction_embeddings(conn: psycopg.Connection) -> None:
+    """Populate ops_agent_transaction_embeddings for seeded E2E transactions."""
+    if not VECTOR_ENABLED:
+        print("[SEED] VECTOR_ENABLED=false; skipping embedding backfill")
+        return
+
+    print("[SEED] Backfilling transaction embeddings for seeded rows...")
+    headers: dict[str, str] = {}
+    if VECTOR_API_KEY:
+        headers["Authorization"] = f"Bearer {VECTOR_API_KEY}"
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                id::text AS transaction_pk_id,
+                transaction_id::text AS transaction_id,
+                card_id,
+                merchant_id,
+                transaction_amount,
+                transaction_currency,
+                transaction_context
+            FROM fraud_gov.transactions
+            WHERE transaction_context->>'seed_marker' = %s
+            ORDER BY transaction_timestamp DESC
+            """,
+            [SEED_CONTEXT_MARKER],
+        )
+        rows = cur.fetchall()
+
+    if not rows:
+        print("[SEED] No seeded transactions found for embedding backfill")
+        return
+
+    with httpx.Client(timeout=httpx.Timeout(20.0)) as client:
+        seeded_count = 0
+        for row in rows:
+            transaction_context = row[6] if isinstance(row[6], dict) else {}
+            embed_input = _build_embedding_text(
+                {
+                    "transaction_amount": row[4],
+                    "merchant_id": row[3],
+                    "transaction_currency": row[5],
+                }
+            )
+            response = client.post(
+                f"{VECTOR_API_BASE}/embed",
+                json={"model": VECTOR_MODEL_NAME, "input": embed_input},
+                headers=headers,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            embeddings = payload.get("embeddings")
+            if not isinstance(embeddings, list) or not embeddings:
+                raise RuntimeError(f"Embedding payload missing vectors for transaction {row[1]}")
+            embedding = embeddings[0]
+            if not isinstance(embedding, list) or not embedding:
+                raise RuntimeError(f"Embedding payload vector missing for transaction {row[1]}")
+
+            metadata = {
+                "seed_marker": SEED_CONTEXT_MARKER,
+                "seed_version": SEED_CONTEXT_VERSION,
+                "seed_scenario": transaction_context.get("seed_scenario"),
+                "seed_sequence": transaction_context.get("seed_sequence"),
+                "seed_is_target": transaction_context.get("seed_is_target"),
+                "transaction_id": row[1],
+                "card_id": row[2],
+                "merchant_id": row[3],
+            }
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO fraud_gov.ops_agent_transaction_embeddings (
+                        transaction_id, embedding, model_name, metadata, created_at, updated_at
+                    )
+                    VALUES (
+                        %s, CAST(%s AS vector), %s, CAST(%s AS jsonb), NOW(), NOW()
+                    )
+                    ON CONFLICT (transaction_id) DO UPDATE SET
+                        embedding = EXCLUDED.embedding,
+                        model_name = EXCLUDED.model_name,
+                        metadata = EXCLUDED.metadata,
+                        updated_at = NOW()
+                    """,
+                    [
+                        row[0],
+                        json.dumps(embedding),
+                        VECTOR_MODEL_NAME,
+                        json.dumps(metadata),
+                    ],
+                )
+            seeded_count += 1
+        conn.commit()
+
+    print(
+        f"[SEED] Backfilled embeddings: {seeded_count} rows "
+        f"(model={VECTOR_MODEL_NAME}, base={VECTOR_API_BASE})"
+    )
 
 
 def seed_clear_fraud_card_testing(conn: psycopg.Connection) -> str:
@@ -1426,8 +1618,10 @@ def main() -> None:
         conn.commit()
         scenarios["card_testing_sequence"] = seed_card_testing_sequence(conn)
         conn.commit()
+        seed_transaction_embeddings(conn)
+        matrix_scenarios = build_matrix_manifest(conn)
         validate_seed_quality(conn, scenarios)
-        write_seed_manifest(scenarios)
+        write_seed_manifest(scenarios, matrix_scenarios=matrix_scenarios)
 
     # Print summary outside the connection context
     print("\n=== Test Data Summary ===")

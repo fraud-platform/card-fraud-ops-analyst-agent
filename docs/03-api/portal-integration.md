@@ -12,9 +12,9 @@ Displays the latest severity score, insight summary, and evidence snippets for a
 
 Lists pending analyst recommendations. Supports filtering by status, severity, and type. Supports acknowledge and reject actions.
 
-### 3. Rule Draft Action
+### 3. Rule Draft Visibility
 
-Allows an analyst to generate and preview a draft rule package from an investigation. Requires explicit analyst confirmation before export to Rule Management.
+Allows an analyst to view the generated rule draft attached to an investigation when available.
 
 ## UX Constraints
 
@@ -31,11 +31,12 @@ All endpoints use the base prefix `/api/v1/ops-agent`. Auth0 Bearer token requir
 |-----------|--------|-----------|
 | Transaction detail page | `GET` | `/api/v1/ops-agent/transactions/{transaction_id}/insights` |
 | Trigger deep investigation | `POST` | `/api/v1/ops-agent/investigations/run` |
-| Fetch investigation result | `GET` | `/api/v1/ops-agent/investigations/{run_id}` |
+| List investigations | `GET` | `/api/v1/ops-agent/investigations` |
+| Fetch investigation result | `GET` | `/api/v1/ops-agent/investigations/{investigation_id}` |
+| Resume investigation | `POST` | `/api/v1/ops-agent/investigations/{investigation_id}/resume` |
+| View investigation rule draft | `GET` | `/api/v1/ops-agent/investigations/{investigation_id}/rule-draft` |
 | Recommendation queue page | `GET` | `/api/v1/ops-agent/worklist/recommendations` |
-| Acknowledge recommendation | `POST` | `/api/v1/ops-agent/worklist/recommendations/{id}/acknowledge` |
-| Create rule draft | `POST` | `/api/v1/ops-agent/rule-drafts` |
-| Export rule draft | `POST` | `/api/v1/ops-agent/rule-drafts/{id}/export` |
+| Acknowledge recommendation | `POST` | `/api/v1/ops-agent/worklist/recommendations/{recommendation_id}/acknowledge` |
 
 ## Frontend Permission Mapping
 
@@ -44,7 +45,6 @@ All endpoints use the base prefix `/api/v1/ops-agent`. Auth0 Bearer token requir
 | View insight panel, recommendation queue, investigation results | `ops_agent:read` |
 | Trigger investigation run | `ops_agent:run` |
 | Acknowledge or reject recommendations | `ops_agent:ack` |
-| Create or export rule drafts | `ops_agent:draft` |
 | Admin operations | `ops_agent:admin` |
 
 ## Authentication
@@ -76,7 +76,7 @@ Content-Type: application/json
 
 {
   "transaction_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "mode": "deterministic"
+  "mode": "FULL"
 }
 ```
 
@@ -88,6 +88,7 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "analyst_note": "Reviewed and confirmed."
+  "action": "ACKNOWLEDGED",
+  "comment": "Reviewed and confirmed."
 }
 ```

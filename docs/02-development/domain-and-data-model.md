@@ -34,7 +34,7 @@ All v1 tables remain in `fraud_gov`.
 - `insight_summary` (text)
 - `insight_type` (text)
 - `generated_at` (timestamptz)
-- `model_mode` (`deterministic|hybrid`)
+- `model_mode` (`agentic`; legacy values may appear in historical rows)
 
 ### `fraud_gov.ops_agent_evidence`
 
@@ -71,11 +71,11 @@ All v1 tables remain in `fraud_gov`.
 - `run_id` (UUID PK)
 - `mode` (`quick|deep`)
 - `trigger_ref` (text)
-- `model_mode` (`deterministic|hybrid`)
+- `model_mode` (`agentic`; legacy values may appear in historical rows)
 - `started_at` (timestamptz)
 - `completed_at` (timestamptz nullable)
 - `status` (`RUNNING|SUCCESS|FAILED`)
-- `llm_status` (`disabled|skipped|deterministic|success|fallback|failed`)
+- `llm_status` (`disabled|skipped|success|fallback|failed`)
 - `llm_error` (text nullable)
 - `llm_model` (text nullable)
 - `duration_ms` (double precision nullable)

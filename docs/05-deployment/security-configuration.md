@@ -119,7 +119,7 @@ The service uses Auth0 custom scopes for fine-grained access control.
 | `ops_agent:read` | Read-only access | GET /insights, GET /recommendations, GET /investigations |
 | `ops_agent:run` | Run investigations | POST /investigations/run |
 | `ops_agent:ack` | Acknowledge recommendations | POST /worklist/recommendations/{id}/acknowledge |
-| `ops_agent:draft` | Create rule drafts | POST /rule-drafts |
+| `ops_agent:draft` | Reserved for future draft mutation/export APIs | (no active v1 write endpoint) |
 | `ops_agent:admin` | Administrative operations | Full access |
 
 ### Endpoint Protection
@@ -151,33 +151,25 @@ from app.core.dependencies import (
 
 ## Human Approval Enforcement
 
-The service enforces human approval for all rule draft exports to the Rule Management API.
+Human analysts remain the final decision authority for all fraud actions and rule activation decisions.
 
 ### Environment Variable
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `OPS_AGENT_ENFORCE_HUMAN_APPROVAL` | bool | `true` | Require human approval before rule export |
+| `OPS_AGENT_ENFORCE_HUMAN_APPROVAL` | bool | `true` | Enforce human gate for analyst/rule actions in non-local environments |
 
 ### Production Enforcement
 
-If `OPS_AGENT_ENFORCE_HUMAN_APPROVAL=false` in production (`APP_ENV=prod`), the service raises `RuntimeError` at startup:
+If `OPS_AGENT_ENFORCE_HUMAN_APPROVAL=false` in production (`APP_ENV=prod`), startup must fail.
 
-```python
-raise ValueError("Human approval enforcement must be enabled in production environment")
-```
+### Rule Draft Handling (Current v1)
 
-This is a hard security constraint that cannot be bypassed in production.
+1. Investigation may produce a draft artifact linked to the run.
+2. Draft is stored in `ops_agent_rule_drafts` for analyst visibility.
+3. Active export/mutation APIs are intentionally not exposed in current v1 surface.
 
-### Rule Draft Export Flow
-
-1. Analyst creates rule draft via POST /rule-drafts
-2. Draft is stored in `ops_agent_rule_drafts` table with `status=pending`
-3. Analyst reviews draft in Rule Management UI
-4. Analyst approves export via explicit action
-5. Service validates `enforce_human_approval=true` before exporting
-
-**Critical:** The service never auto-exports rule drafts. All exports require explicit human approval.
+**Critical:** The service does not auto-activate or auto-export rules.
 
 ## Request Size Limits
 

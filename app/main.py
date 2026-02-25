@@ -24,7 +24,6 @@ from app.api.routes.insights import router as insights_router
 from app.api.routes.investigations import router as investigations_router
 from app.api.routes.monitoring import router as monitoring_router
 from app.api.routes.recommendations import router as recommendations_router
-from app.api.routes.rule_drafts import router as rule_drafts_router
 from app.core.auth import close_async_http_client
 from app.core.config import AppEnvironment, Settings, get_settings
 from app.core.database import get_engine, get_session_factory, reset_engine
@@ -81,8 +80,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.engine = engine
     app.state.session_factory = session_factory
 
+    # Initialize TMClient for readiness checks and service injection
+    from app.clients.tm_client import TMClient
+
+    tm_client = TMClient(config=settings.tm_client)
+    app.state.tm_client = tm_client
+
     yield
 
+    await tm_client.close()
     await close_async_http_client()
     await reset_engine()
 
@@ -96,8 +102,8 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Card Fraud Ops Analyst Agent",
         description=(
-            "Autonomous fraud analyst assistant with deterministic evidence pipeline. "
-            "Generates advisory insights and recommendations for human analysts."
+            "LangGraph-based autonomous fraud analyst assistant. "
+            "Uses planner-driven tool orchestration for fraud investigation."
         ),
         version=settings.app.version,
         lifespan=lifespan,
@@ -120,7 +126,6 @@ def create_app() -> FastAPI:
     app.include_router(investigations_router, prefix=API_V1_PREFIX + OPS_AGENT_PREFIX)
     app.include_router(insights_router, prefix=API_V1_PREFIX + OPS_AGENT_PREFIX)
     app.include_router(recommendations_router, prefix=API_V1_PREFIX + OPS_AGENT_PREFIX)
-    app.include_router(rule_drafts_router, prefix=API_V1_PREFIX + OPS_AGENT_PREFIX)
 
     setup_telemetry(app, settings)
 

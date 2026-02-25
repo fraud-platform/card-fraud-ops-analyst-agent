@@ -1,5 +1,6 @@
 """Unit tests for config module."""
 
+import pytest
 from pydantic import SecretStr
 
 from app.core.config import (
@@ -117,7 +118,6 @@ def test_security_config_defaults(monkeypatch):
 
 def test_feature_flags_defaults():
     config = FeatureFlagsConfig()
-    assert config.enable_deterministic_pipeline is True
     assert config.enable_llm_reasoning is True
     assert config.enforce_human_approval is True
 
@@ -160,10 +160,25 @@ def test_settings_composition():
     settings = Settings()
     assert settings.app.name == "card-fraud-ops-analyst-agent"
     assert settings.server.port == 8003
-    assert settings.features.enable_deterministic_pipeline is True
+    assert settings.features.enable_llm_reasoning is True
 
 
-def test_llm_config_does_not_treat_gpt_provider_as_ollama(monkeypatch):
+def test_llm_config_requires_ollama_provider(monkeypatch):
     monkeypatch.setenv("OLLAMA_API_KEY", "ollama-key")
-    config = LLMConfig(provider="gpt-4o-mini", api_key=SecretStr("openai-key"), base_url="")
-    assert config.api_key.get_secret_value() == "openai-key"
+    with pytest.raises(ValueError, match="LLM_PROVIDER must be an Ollama model"):
+        LLMConfig(provider="anthropic/claude-3-5-sonnet", base_url="https://ollama.com")
+
+
+def test_llm_config_rejects_localhost_llm_base_url():
+    with pytest.raises(ValueError, match="cannot be localhost"):
+        LLMConfig(provider="ollama/gpt-oss:20b", base_url="http://localhost:11434")
+
+
+def test_llm_config_uses_ollama_api_key(monkeypatch):
+    monkeypatch.setenv("OLLAMA_API_KEY", "ollama-key")
+    config = LLMConfig(
+        provider="ollama/gpt-oss:20b",
+        base_url="https://ollama.com",
+        api_key=SecretStr(""),
+    )
+    assert config.api_key.get_secret_value() == "ollama-key"

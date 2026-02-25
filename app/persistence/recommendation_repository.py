@@ -29,6 +29,9 @@ class RecommendationRepository:
         recommendation_type: str,
         payload: dict[str, Any],
         idempotency_key: str,
+        title: str = "Generated recommendation",
+        impact: str = "Review recommended",
+        investigation_id: str | None = None,
     ) -> dict[str, Any]:
         """Insert or update recommendation (idempotent)."""
         recommendation_id = str(uuid.uuid7())
@@ -36,17 +39,19 @@ class RecommendationRepository:
 
         query = text("""
             INSERT INTO fraud_gov.ops_agent_recommendations
-                (recommendation_id, insight_id, recommendation_type, recommendation_payload,
+                (recommendation_id, insight_id, investigation_id, type, title, impact, payload,
                  status, idempotency_key, created_at)
             VALUES
-                (:recommendation_id, :insight_id, :recommendation_type, :recommendation_payload,
+                (:recommendation_id, :insight_id, :investigation_id, :type, :title, :impact, :payload,
                  'OPEN', :idempotency_key, :created_at)
             ON CONFLICT (idempotency_key) DO UPDATE
             SET insight_id = EXCLUDED.insight_id,
-                recommendation_type = EXCLUDED.recommendation_type,
-                recommendation_payload = EXCLUDED.recommendation_payload
-            RETURNING recommendation_id, insight_id,
-                      recommendation_type AS type, recommendation_payload AS payload,
+                investigation_id = EXCLUDED.investigation_id,
+                type = EXCLUDED.type,
+                title = EXCLUDED.title,
+                impact = EXCLUDED.impact,
+                payload = EXCLUDED.payload
+            RETURNING recommendation_id, insight_id, investigation_id, type, title, impact, payload,
                       status, acknowledged_by, acknowledged_at, created_at
         """)
         result = await self.session.execute(
@@ -54,8 +59,11 @@ class RecommendationRepository:
             {
                 "recommendation_id": recommendation_id,
                 "insight_id": insight_id,
-                "recommendation_type": recommendation_type,
-                "recommendation_payload": json.dumps(payload),
+                "investigation_id": investigation_id,
+                "type": recommendation_type,
+                "title": title,
+                "impact": impact,
+                "payload": json.dumps(payload),
                 "idempotency_key": idempotency_key,
                 "created_at": now,
             },
@@ -63,8 +71,7 @@ class RecommendationRepository:
         row = result.fetchone()
         if row is None:
             select_query = text("""
-                SELECT recommendation_id, insight_id,
-                       recommendation_type AS type, recommendation_payload AS payload,
+                SELECT recommendation_id, insight_id, investigation_id, type, title, impact, payload,
                        status, acknowledged_by, acknowledged_at, created_at
                 FROM fraud_gov.ops_agent_recommendations
                 WHERE idempotency_key = :idempotency_key
@@ -89,8 +96,7 @@ class RecommendationRepository:
                 acknowledged_by = :acknowledged_by,
                 acknowledged_at = :acknowledged_at
             WHERE recommendation_id = :recommendation_id
-            RETURNING recommendation_id, insight_id,
-                      recommendation_type AS type, recommendation_payload AS payload,
+            RETURNING recommendation_id, insight_id, investigation_id, type, title, impact, payload,
                       status, acknowledged_by, acknowledged_at, created_at
         """)
         result = await self.session.execute(
@@ -133,10 +139,10 @@ class RecommendationRepository:
 
         query_parts = [
             """
-            SELECT r.recommendation_id, r.insight_id,
-                   r.recommendation_type AS type, r.recommendation_payload AS payload,
+            SELECT r.recommendation_id, r.insight_id, r.investigation_id,
+                   r.type, r.title, r.impact, r.payload,
                    r.status, r.acknowledged_by, r.acknowledged_at, r.created_at,
-                   i.severity, i.insight_summary AS summary
+                   i.severity, i.summary
             FROM fraud_gov.ops_agent_recommendations r
             JOIN fraud_gov.ops_agent_insights i ON i.insight_id = r.insight_id
             WHERE r.status = 'OPEN'
@@ -160,7 +166,7 @@ class RecommendationRepository:
         )
         query = text("\n".join(query_parts))
 
-        params = {"limit": limit + 1}
+        params: dict[str, Any] = {"limit": limit + 1}
         if severity:
             params["severity"] = severity
         if has_cursor:
@@ -194,8 +200,7 @@ class RecommendationRepository:
     async def get(self, recommendation_id: str) -> dict[str, Any] | None:
         """Get recommendation by ID."""
         query = text("""
-            SELECT recommendation_id, insight_id,
-                   recommendation_type AS type, recommendation_payload AS payload,
+            SELECT recommendation_id, insight_id, investigation_id, type, title, impact, payload,
                    status, acknowledged_by, acknowledged_at, created_at
             FROM fraud_gov.ops_agent_recommendations
             WHERE recommendation_id = :recommendation_id
@@ -205,27 +210,6 @@ class RecommendationRepository:
         if row is None:
             return None
         return row_to_dict(row)
-
-    async def list_by_insight_id(self, insight_id: str) -> list[dict[str, Any]]:
-        """Get recommendations by insight ID.
-
-        Args:
-            insight_id: The insight ID to fetch recommendations for
-
-        Returns:
-            List of recommendation dictionaries
-        """
-        query = text("""
-            SELECT recommendation_id, insight_id,
-                   recommendation_type AS type, recommendation_payload AS payload,
-                   status, acknowledged_by, acknowledged_at, created_at
-            FROM fraud_gov.ops_agent_recommendations
-            WHERE insight_id = :insight_id
-            ORDER BY created_at DESC
-        """)
-        result = await self.session.execute(query, {"insight_id": insight_id})
-        rows = result.fetchall()
-        return [row_to_dict(row) for row in rows]
 
     async def update_status_with_guard(
         self,
@@ -257,8 +241,7 @@ class RecommendationRepository:
                 acknowledged_at = :acknowledged_at
             WHERE recommendation_id = :recommendation_id
               AND status = :expected_status
-            RETURNING recommendation_id, insight_id,
-                      recommendation_type AS type, recommendation_payload AS payload,
+            RETURNING recommendation_id, insight_id, investigation_id, type, title, impact, payload,
                       status, acknowledged_by, acknowledged_at, created_at
         """)
         result = await self.session.execute(

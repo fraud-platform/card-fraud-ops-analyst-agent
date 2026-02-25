@@ -49,8 +49,7 @@
 - [x] Rollback and feature-flag kill switches tested.
 - [x] Performance baselines established (see [docs/06-operations/performance-baselines.md](../06-operations/performance-baselines.md)).
 - [x] Feature flags for gradual rollout:
-  - [x] `OPS_AGENT_ENABLE_DETERMINISTIC_PIPELINE=true` (baseline)
-  - [x] `OPS_AGENT_ENABLE_LLM_REASONING=true` (default-on)
+  - [x] `OPS_AGENT_ENABLE_LLM_REASONING=true` (baseline/default-on)
   - [x] `OPS_AGENT_ENABLE_RULE_DRAFT_EXPORT=false` (opt-in)
   - [x] `VECTOR_ENABLED=true` (default-on)
   - [x] `OPS_AGENT_CONFLICT_MATRIX_ENABLED=false` (opt-in)
@@ -66,8 +65,8 @@
   - [x] Integration tests: validated when DB/test config is available
   - [x] E2E tests: passing in local verification (environment-dependent)
 - [x] Code coverage: generated and reviewed via `htmlcov/index.html`
-- [x] E2E tests passing (full pipeline with LLM hybrid mode)
-- [x] Performance baselines validated (deterministic < 500ms P95, LLM < 90s P95).
+- [x] E2E tests passing (full pipeline with agentic runtime mode)
+- [x] Performance baselines validated (agentic fallback path < 500ms P95, LLM path < 90s P95).
 
 ## Business and Governance
 
@@ -77,7 +76,7 @@
 - [x] ADRs (Architecture Decision Records) documented for key decisions:
   - [x] [ADR 0001: TM as Source of Truth](../07-reference/0001-tm-as-source-of-truth.md)
   - [x] [ADR 0002: Human Approval Finality](../07-reference/0002-human-approval-finality.md)
-  - [x] [ADR 0004: Hybrid Deterministic Plus LLM Pipeline](../07-reference/0004-hybrid-deterministic-plus-llm-pipeline.md)
-  - [x] [ADR 0007: Dual LLM Provider, Cloud Default, Local Fallback](../07-reference/0007-dual-llm-provider-cloud-default-local-fallback.md)
+  - [x] [ADR 001: Agentic Fraud Analyst Architecture](../07-reference/agentic/adr_001_agentic_fraud_analyst_architecture.md)
+  - [x] [ADR 003: Agent Planner and Prompt Engineering](../07-reference/agentic/adr_003_agent_planner_and_prompt_engineering.md)
   - [x] [ADR 0008: Rollout Gating and SLO Policy](../07-reference/0008-rollout-gating-and-slo-policy.md)
-  - [x] [ADR 0009: LLM Provider Abstraction](../07-reference/0009-llm-provider-abstraction.md)
+  - [x] [ADR 006: LangGraph Production Runtime Specification](../07-reference/agentic/adr_006_lang_graph_production_runtime_specification.md)

@@ -40,6 +40,7 @@ htmlcov/
 htmlreports/
 .tox/
 .nox/
+.pre-commit-cache/
 
 # Environment - NO .env files (use Doppler)
 .env
@@ -50,6 +51,7 @@ htmlreports/
 
 # Logs
 *.log
+logs/
 
 # OS
 .DS_Store
@@ -73,9 +75,15 @@ memory/
 
 # Generated coverage / report files
 coverage.json
+e2e-results/
+playwright-report/
+test-results/
 
 # Docs scratch/archive noise
 docs/archive/_scratch/
 docs/archive/generated/
 docs/archive/*.tmp.md
 docs/archive/*.bak.md
+
+# Local scratch artifacts
+temp/

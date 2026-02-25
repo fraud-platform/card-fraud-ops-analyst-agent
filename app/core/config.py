@@ -261,16 +261,10 @@ class ObservabilityConfig(BaseSettings):
 
 
 class FeatureFlagsConfig(BaseSettings):
-    enable_deterministic_pipeline: bool = Field(default=True)
     enable_llm_reasoning: bool = Field(default=True)
     enable_rule_draft_export: bool = Field(default=False)
     enforce_human_approval: bool = Field(default=True)
     rule_management_base_url: str = Field(default="")
-
-    narrative_version: str = Field(default="v1")
-    counter_evidence_enabled: bool = Field(default=False)
-    conflict_matrix_enabled: bool = Field(default=False)
-    explanation_builder_enabled: bool = Field(default=False)
 
     model_config = SettingsConfigDict(env_prefix="OPS_AGENT_")
 
@@ -362,13 +356,12 @@ class VectorSearchConfig(BaseSettings):
 
 
 class LLMConfig(BaseSettings):
-    provider: str = Field(default="anthropic/claude-sonnet-4-5-20250929")
-    base_url: str = Field(default="")
+    provider: str = Field(default="ollama/gpt-oss:20b")
+    base_url: str = Field(default="https://ollama.com")
     api_key: SecretStr = Field(default=SecretStr(""))
     timeout: int = Field(default=30)
     max_retries: int = Field(default=1)
     stage_timeout_seconds: int = Field(default=20)
-    fallback_model: str = Field(default="ollama/llama3.2")
     prompt_guard_enabled: bool = Field(default=True)
     max_prompt_tokens: int = Field(default=4000)
     max_completion_tokens: int = Field(default=384)
@@ -377,18 +370,75 @@ class LLMConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LLM_")
 
     @model_validator(mode="after")
-    def fill_ollama_api_key(self) -> LLMConfig:
-        is_ollama_host = bool(self.base_url) and (
-            "ollama.com" in self.base_url.lower() or "localhost:11434" in self.base_url.lower()
-        )
-        is_ollama_provider = self.provider.startswith(("ollama/", "ollama_chat/")) or is_ollama_host
+    def enforce_ollama_cloud_only(self) -> LLMConfig:
+        if not self.provider.startswith(("ollama/", "ollama_chat/")):
+            raise ValueError(
+                "LLM_PROVIDER must be an Ollama model (prefix ollama/ or ollama_chat/)."
+            )
 
-        # For Ollama providers, prioritize OLLAMA_API_KEY over LLM_API_KEY
-        # This is needed because Doppler sets LLM_API_KEY but Ollama keys use OLLAMA_API_KEY
-        if is_ollama_provider:
+        base_url = self.base_url.strip()
+        if not base_url:
+            raise ValueError("LLM_BASE_URL is required and must point to Ollama Cloud.")
+
+        lower = base_url.lower()
+        if "localhost" in lower or "127.0.0.1" in lower:
+            raise ValueError(
+                "LLM_BASE_URL cannot be localhost for reasoning/planner. Use Ollama Cloud endpoint."
+            )
+        if "ollama.com" not in lower:
+            raise ValueError("LLM_BASE_URL must target Ollama Cloud (https://ollama.com).")
+
+        if not self.api_key.get_secret_value():
             ollama_key = os.getenv("OLLAMA_API_KEY", "")
             if ollama_key:
                 self.api_key = SecretStr(ollama_key)
+        return self
+
+
+class LangGraphConfig(BaseSettings):
+    max_steps: int = Field(default=20)
+    investigation_timeout_seconds: int = Field(default=120)
+    tool_timeout_seconds: int = Field(default=30)
+    planner_timeout_seconds: int = Field(default=10)
+
+    model_config = SettingsConfigDict(env_prefix="LANGGRAPH_")
+
+
+class PlannerConfig(BaseSettings):
+    llm_enabled: bool = Field(default=True)
+    model_name: str = Field(default="ollama/gpt-oss:20b")
+    temperature: float = Field(default=0.1)
+    max_tokens: int = Field(default=256)
+    timeout_seconds: int = Field(default=10)
+
+    model_config = SettingsConfigDict(env_prefix="PLANNER_")
+
+
+class TMClientConfig(BaseSettings):
+    base_url: str = Field(default="http://localhost:8002")
+    timeout_seconds: float = Field(default=10.0)
+    retry_count: int = Field(default=3)
+    circuit_breaker_threshold: int = Field(default=5)
+    circuit_breaker_timeout: int = Field(default=60)
+    m2m_client_id: str = Field(default="")
+    m2m_client_secret: SecretStr = Field(default=SecretStr(""))
+    m2m_audience: str = Field(default="")
+
+    model_config = SettingsConfigDict(env_prefix="TM_")
+
+    @model_validator(mode="after")
+    def adapt_localhost_for_container_runtime(self) -> TMClientConfig:
+        """Use Docker service hostname when TM base URL is localhost inside a container.
+
+        TM runs as a sibling container named 'transaction-management' in the platform
+        Docker network. Localhost from inside the ops-agent container doesn't reach TM.
+        """
+        if os.getenv("TM_BASE_URL"):
+            return self
+        if _is_running_in_container() and self.base_url.startswith("http://localhost:"):
+            self.base_url = self.base_url.replace(
+                "http://localhost:", "http://transaction-management:", 1
+            )
         return self
 
 
@@ -403,6 +453,9 @@ class Settings(BaseSettings):
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     vector_search: VectorSearchConfig = Field(default_factory=VectorSearchConfig)
+    langgraph: LangGraphConfig = Field(default_factory=LangGraphConfig)
+    planner: PlannerConfig = Field(default_factory=PlannerConfig)
+    tm_client: TMClientConfig = Field(default_factory=TMClientConfig)
     metrics_token: str | None = Field(default=None)
 
     @model_validator(mode="after")
@@ -416,6 +469,19 @@ class Settings(BaseSettings):
             raise ValueError("Human approval enforcement must be enabled in production environment")
         if self.app.env == AppEnvironment.PROD and self.observability.otlp_insecure:
             raise ValueError("OTLP insecure mode is not allowed in production")
+        if self.app.env == AppEnvironment.PROD and not self.tm_client.m2m_client_id:
+            raise ValueError("TM_M2M_CLIENT_ID required in PROD")
+        if (
+            self.app.env == AppEnvironment.PROD
+            and not self.tm_client.m2m_client_secret.get_secret_value()
+        ):
+            raise ValueError("TM_M2M_CLIENT_SECRET required in PROD")
+        if self.app.env == AppEnvironment.PROD and self.planner.temperature > 0.3:
+            raise ValueError("Planner temperature must be <= 0.3 in PROD for consistent behavior")
+        if self.planner.model_name != self.llm.provider:
+            raise ValueError(
+                "PLANNER_MODEL_NAME must match LLM_PROVIDER to prevent provider/model mismatch."
+            )
         return self
 
 

@@ -4,7 +4,7 @@
 
 Testing is organized into four layers:
 
-- `tests/unit`: deterministic and fast, no external services.
+- `tests/unit`: predictable and fast, no external services.
 - `tests/smoke`: API contract checks with FastAPI `TestClient`.
 - `tests/integration`: database-backed checks when DB/test config is available.
 - `tests/e2e`: live end-to-end scenarios against running services.
@@ -23,17 +23,23 @@ uv run pytest tests/smoke -v
 Integration and e2e are required for release validation when the environment is available:
 
 ```bash
-uv run pytest tests/integration -v
+doppler run --config local-test -- uv run pytest tests/integration -v
 uv run pytest tests/e2e -v
 ```
 
-## Current Validation Baseline (2026-02-16)
+If `local-test` is not available, use:
+
+```bash
+doppler run --config local -- uv run pytest tests/integration -v
+```
+
+## Current Validation Baseline (2026-02-22)
 
 - Lint: passing (`ruff check`)
 - Format: passing (`ruff format --check`)
 - Unit + smoke: passing in local verification
 - Integration: conditionally executed (DB/test config dependent)
-- E2E: deterministic scenario suite with seed manifest + acceptance KPI gate
+- E2E: 31-scenario matrix completed with updated HTML summary (`htmlcov/e2e-scenarios-report.html`)
 
 ## Coverage
 
@@ -50,7 +56,7 @@ Open `htmlcov/index.html` in a browser for line/branch coverage review.
 ### Unit
 
 - No real DB or LLM dependencies.
-- Primary place to validate deterministic logic, repositories (mocked), and service orchestration.
+- Primary place to validate rule/policy logic, repositories (mocked), and service orchestration.
 - `tests/conftest.py` sets `SECURITY_SKIP_JWT_VALIDATION=true` for test-only auth bypass.
 
 ### Smoke
@@ -67,7 +73,7 @@ Open `htmlcov/index.html` in a browser for line/branch coverage review.
 
 - Requires running Ops Agent + Transaction Management services and seeded data.
 - Seed scenarios with `scripts/seed_test_scenarios.py` before running the suite.
-- Seed manifest (`htmlcov/e2e-seed-manifest.json`) is used for deterministic scenario transaction selection.
+- Seed manifest (`htmlcov/e2e-seed-manifest.json`) is used for stable scenario transaction selection.
 - Validates scenario outcomes, worklist behavior, and acknowledgement flow.
 - Enforces acceptance KPI thresholds (`test_acceptance_kpi_gate`) for fraud recall, low-risk precision, recommendation coverage, and latency p95.
 - `fraud_recall_medium_plus` is measured on high-confidence fraud seeds (card testing, velocity burst, cross-merchant spread, high-decline ratio), not mixed/advisory fraud scenarios.

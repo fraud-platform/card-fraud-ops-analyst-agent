@@ -19,10 +19,13 @@ class RuleDraftRepository:
 
     async def create(
         self,
-        recommendation_id: str,
-        insight_id: str,
-        package_version: str,
-        draft_payload: dict[str, Any],
+        investigation_id: str,
+        rule_name: str,
+        rule_description: str,
+        conditions: list[dict[str, Any]],
+        thresholds: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+        recommendation_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a new rule draft."""
         rule_draft_id = str(uuid.uuid7())
@@ -30,22 +33,25 @@ class RuleDraftRepository:
 
         query = text("""
             INSERT INTO fraud_gov.ops_agent_rule_drafts
-                (rule_draft_id, recommendation_id, insight_id, draft_package_version, draft_payload,
-                 export_status, created_at)
+                (rule_draft_id, investigation_id, recommendation_id, rule_name, rule_description,
+                 conditions, thresholds, metadata, export_status, created_at)
             VALUES
-                (:rule_draft_id, :recommendation_id, :insight_id, :draft_package_version, :draft_payload,
-                 'NOT_EXPORTED', :created_at)
-            RETURNING rule_draft_id, recommendation_id, insight_id, draft_package_version, draft_payload,
-                      export_status, exported_to, exported_at, created_at
+                (:rule_draft_id, :investigation_id, :recommendation_id, :rule_name, :rule_description,
+                 :conditions, :thresholds, :metadata, 'NOT_EXPORTED', :created_at)
+            RETURNING rule_draft_id, investigation_id, recommendation_id, rule_name, rule_description,
+                      conditions, thresholds, metadata, export_status, exported_to, exported_at, created_at
         """)
         result = await self.session.execute(
             query,
             {
                 "rule_draft_id": rule_draft_id,
+                "investigation_id": investigation_id,
                 "recommendation_id": recommendation_id,
-                "insight_id": insight_id,
-                "draft_package_version": package_version,
-                "draft_payload": json.dumps(draft_payload),
+                "rule_name": rule_name,
+                "rule_description": rule_description,
+                "conditions": json.dumps(conditions),
+                "thresholds": json.dumps(thresholds),
+                "metadata": json.dumps(metadata or {}),
                 "created_at": now,
             },
         )
@@ -66,8 +72,8 @@ class RuleDraftRepository:
                 exported_to = :exported_to,
                 exported_at = :exported_at
             WHERE rule_draft_id = :rule_draft_id
-            RETURNING rule_draft_id, recommendation_id, draft_package_version, draft_payload,
-                      export_status, exported_to, exported_at, created_at
+            RETURNING rule_draft_id, investigation_id, recommendation_id, rule_name, rule_description,
+                      conditions, thresholds, metadata, export_status, exported_to, exported_at, created_at
         """)
         result = await self.session.execute(
             query,
@@ -83,12 +89,26 @@ class RuleDraftRepository:
     async def get(self, rule_draft_id: str) -> dict[str, Any] | None:
         """Get rule draft by ID."""
         query = text("""
-            SELECT rule_draft_id, recommendation_id, draft_package_version, draft_payload,
-                   export_status, exported_to, exported_at, created_at
+            SELECT rule_draft_id, investigation_id, recommendation_id, rule_name, rule_description,
+                   conditions, thresholds, metadata, export_status, exported_to, exported_at, created_at
             FROM fraud_gov.ops_agent_rule_drafts
             WHERE rule_draft_id = :rule_draft_id
         """)
         result = await self.session.execute(query, {"rule_draft_id": rule_draft_id})
+        row = result.fetchone()
+        if row is None:
+            return None
+        return row_to_dict(row)
+
+    async def get_by_investigation(self, investigation_id: str) -> dict[str, Any] | None:
+        """Get rule draft by investigation ID."""
+        query = text("""
+            SELECT rule_draft_id, investigation_id, recommendation_id, rule_name, rule_description,
+                   conditions, thresholds, metadata, export_status, exported_to, exported_at, created_at
+            FROM fraud_gov.ops_agent_rule_drafts
+            WHERE investigation_id = :investigation_id
+        """)
+        result = await self.session.execute(query, {"investigation_id": investigation_id})
         row = result.fetchone()
         if row is None:
             return None

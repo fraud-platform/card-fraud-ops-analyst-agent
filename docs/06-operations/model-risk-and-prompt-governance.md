@@ -1,4 +1,4 @@
-﻿# Model Risk and Prompt Governance
+# Model Risk and Prompt Governance
 
 ## Objective
 
@@ -6,7 +6,7 @@ Keep LLM usage bounded, explainable, and auditable in fraud operations.
 
 ## Governance Model
 
-- Deterministic evidence is mandatory.
+- Evidence-first tool output is mandatory.
 - LLM output is supplementary narrative and recommendation phrasing.
 - No direct automated action from LLM output.
 
@@ -27,7 +27,7 @@ Keep LLM usage bounded, explainable, and auditable in fraud operations.
 ## Quality Controls
 
 - Hallucination checks on critical fields.
-- Consistency checks against deterministic evidence.
+- Consistency checks against evidence-first signals.
 - Analyst feedback loop for recommendation quality metrics.
 
 ## Agentic Trace Controls

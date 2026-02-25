@@ -8,7 +8,7 @@ Build an enterprise-grade Ops Analyst Agent that accelerates fraud investigation
 
 1. Transaction Management is source of truth.
 2. Human analysts are final decision makers.
-3. Deterministic evidence before LLM narration.
+3. Evidence-first tool outputs before LLM narration.
 4. Full traceability for every recommendation and action.
 5. Least-privilege data and access boundaries.
 
@@ -30,13 +30,13 @@ Build an enterprise-grade Ops Analyst Agent that accelerates fraud investigation
 
 ## Internal Service Modules
 
-- `context_builder`: deterministic feature extraction from `fraud_gov`.
-- `pattern_engine`: deterministic anomaly/pattern scoring.
-- `similarity_engine`: deterministic similarity lookups across historical outcomes.
-- `reasoning_engine`: bounded LLM narrative generation and recommendation text.
-- `recommendation_engine`: policy-constrained recommendation generation.
-- `rule_draft_engine`: transforms approved recommendations into rule draft packages.
-- `audit_engine`: immutable action and run audit emission.
+- `app/agent`: LangGraph planner/executor/completion runtime.
+- `app/tools/context_tool.py`: evidence-oriented feature extraction from `fraud_gov`.
+- `app/tools/pattern_tool.py`: rule-based anomaly/pattern scoring.
+- `app/tools/similarity_tool.py`: vector similarity lookups across historical outcomes.
+- `app/tools/reasoning_tool.py`: bounded LLM narrative generation.
+- `app/tools/recommendation_tool.py`: policy-constrained recommendation generation.
+- `app/tools/rule_draft_tool.py`: rule draft assembly for analyst handoff.
 
 ## Processing Modes
 
@@ -55,10 +55,10 @@ Build an enterprise-grade Ops Analyst Agent that accelerates fraud investigation
 - v1 does not require direct Kafka consumption.
 - Kafka event subscription is reserved for v2 if SLA or latency pressure requires it.
 
-## Reliability Targets (v1)
+## Reliability Targets (Current)
 
-- P95 quick investigation <= 2 seconds.
-- P95 deep investigation <= 8 seconds.
+- Investigation p95 (`run_investigation_p95_ms`) <= 30000 ms in local/platform E2E.
+- Detail fetch p95 (`detail_fetch_p95_ms`) <= 4000 ms.
 - Recommendation generation failure rate < 1% over 1h windows.
 
 ## Cross-Repo Change Surface
@@ -94,7 +94,7 @@ async def run_investigation(
 Use `asyncio.gather()` to execute independent queries concurrently:
 
 ```python
-# From app/agents/context_builder.py
+# From app/tools/context_tool.py
 queries = [
     self.reader.get_transaction_rule_matches(transaction_id),
     self.reader.get_transaction_reviews(transaction_id),
@@ -209,17 +209,17 @@ class ApiError(BaseModel):
 All responses are serialized through Pydantic:
 
 ```python
-@router.get("/{run_id}", response_model=DetailResponse)
+@router.get("/{investigation_id}", response_model=DetailResponse)
 async def get_investigation(
-    run_id: str,
+    investigation_id: str,
     user: RequireOpsRead,
     session: AsyncSession = Depends(get_session),
 ):
     service = InvestigationService(session)
-    result = await service.get_investigation(run_id)
+    result = await service.get_investigation(investigation_id)
 
     if result is None:
-        raise NotFoundError(f"Investigation not found: {run_id}")
+        raise NotFoundError(f"Investigation not found: {investigation_id}")
 
     return DetailResponse(**result)  # Validates response structure
 ```

@@ -1,40 +1,57 @@
-"""Unit tests for redaction policies."""
+"""Unit tests for LLM/log redaction utilities."""
 
-from app.llm.redaction import (
-    RedactionPolicy,
-    detect_pii_in_values,
-    redact_context,
-    validate_prompt_payload,
-)
+from __future__ import annotations
+
+from app.utils.redaction import redact_state_for_llm
 
 
-def test_redact_context_removes_blocked_fields():
-    context = {
-        "transaction_id": "txn-1",
-        "pan": "4111111111111111",
-        "nested": {"email": "a@b.com", "amount": 25},
-    }
-
-    redacted = redact_context(context, RedactionPolicy())
-
-    assert "pan" not in redacted
-    assert "nested" not in redacted
-    assert redacted["transaction_id"] == "txn-1"
-
-
-def test_validate_prompt_payload_detects_violations():
-    payload = {"safe": "x", "ip_address": "1.2.3.4", "nested": {"phone": "555"}}
-    violations = validate_prompt_payload(payload, RedactionPolicy())
-    assert any("ip_address" in v for v in violations)
-    assert any("phone" in v for v in violations)
-
-
-def test_detect_pii_in_values_finds_common_patterns():
+def test_redact_state_for_llm_masks_sensitive_keys_and_notes() -> None:
     payload = {
-        "insight_summary": "contact john@example.com from 1.2.3.4",
-        "observations": ["use card 4111 1111 1111 1111"],
+        "transaction": {
+            "transaction_id": "txn-123",
+            "card_id": "tok_abcdef123456",
+            "user_id": "user-123",
+            "merchant_id": "merchant-456",
+            "amount": 199.99,
+        },
+        "analyst_notes": [
+            {"note": "Card 4111111111111111 and email alice@example.com"},
+        ],
+        "free_text": "customer email is bob@example.com",
     }
-    violations = detect_pii_in_values(payload)
-    assert any("email" in v for v in violations)
-    assert any("ipv4" in v for v in violations)
-    assert any("credit_card" in v for v in violations)
+
+    redacted = redact_state_for_llm(payload)
+
+    assert redacted["transaction"]["transaction_id"] == "txn-123"
+    assert redacted["transaction"]["amount"] == 199.99
+    assert redacted["transaction"]["card_id"] != "tok_abcdef123456"
+    assert redacted["transaction"]["user_id"] == "***REDACTED***"
+    assert redacted["transaction"]["merchant_id"] == "***REDACTED***"
+    assert redacted["analyst_notes_count"] == 1
+    assert "***EMAIL***" in redacted["free_text"]
+
+
+def test_redact_state_for_llm_replaces_sensitive_nested_collections() -> None:
+    payload = {
+        "context": {
+            "customer_history": [{"ip_address": "10.0.0.1"}, {"ip_address": "10.0.0.2"}],
+            "signals": [{"name": "velocity_spike"}],
+        }
+    }
+
+    redacted = redact_state_for_llm(payload)
+
+    assert redacted["context"]["customer_history_count"] == 2
+    assert redacted["context"]["signals"] == [{"name": "velocity_spike"}]
+
+
+def test_redact_state_for_llm_masks_name_in_sensitive_context_only() -> None:
+    payload = {
+        "holder_profile": {"name": "Alice Example"},
+        "signals": [{"name": "velocity_spike"}],
+    }
+
+    redacted = redact_state_for_llm(payload)
+
+    assert redacted["holder_profile"]["name"] == "***REDACTED***"
+    assert redacted["signals"] == [{"name": "velocity_spike"}]
