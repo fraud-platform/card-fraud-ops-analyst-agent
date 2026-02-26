@@ -14,6 +14,7 @@ from app.core.errors import ToolPreconditionError
 from app.persistence.base import row_to_dict
 from app.tools._core.similarity_logic import evaluate_similarity
 from app.tools.base import BaseTool
+from app.tools.evidence import EvidenceEntry, append_evidence
 from app.utils.dataclass_utils import to_dict
 
 if TYPE_CHECKING:
@@ -123,19 +124,17 @@ class SimilarityTool(BaseTool):
             candidate_count = 0
             match_count = 0
 
-        evidence_entry = {
-            "category": "similarity_analysis",
-            "tool": "similarity_tool",
-            "description": (
-                f"Found {match_count} similar transactions (candidates={candidate_count})"
-            ),
-            "data": result_payload,
-        }
+        evidence_entry = EvidenceEntry(
+            category="similarity_analysis",
+            tool=self.name,
+            description=f"Found {match_count} similar transactions (candidates={candidate_count})",
+            data=result_payload,
+        )
 
-        return update_state(
+        return append_evidence(
             state,
+            evidence_entry,
             similarity_results=result_payload,
-            evidence=[*state["evidence"], evidence_entry],
         )
 
     def _build_embed_text(self, context: dict[str, Any]) -> str:

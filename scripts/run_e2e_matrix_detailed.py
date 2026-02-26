@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from collections import Counter, defaultdict
 from itertools import zip_longest
@@ -17,9 +18,14 @@ from uuid import uuid4
 
 import httpx
 
+from scripts.docker_guard import (
+    assert_local_docker_ops_agent,
+    assert_local_docker_transaction_management,
+)
 from tests.e2e.reporter import E2EReporter
 
 BASE_URL = "http://localhost:8003"
+TM_BASE_URL = os.getenv("TM_BASE_URL", "http://localhost:8002")
 API_PREFIX = "/api/v1/ops-agent"
 MANIFEST_PATH = Path("htmlcov/e2e-seed-manifest.json")
 JSON_REPORT_PATH = Path("htmlcov/e2e-31-matrix-report-after-docker-fix.json")
@@ -55,6 +61,7 @@ HIGH_RISK_LANGUAGE_MARKERS = (
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run detailed 31-scenario E2E matrix")
     parser.add_argument("--base-url", default=BASE_URL)
+    parser.add_argument("--tm-base-url", default=TM_BASE_URL)
     parser.add_argument("--timeout", type=int, default=TIMEOUT)
     parser.add_argument("--manifest", type=Path, default=MANIFEST_PATH)
     parser.add_argument("--json-report", type=Path, default=JSON_REPORT_PATH)
@@ -275,6 +282,13 @@ def _non_empty_dict(value: Any) -> bool:
 
 def run() -> int:
     args = _parse_args()
+    try:
+        assert_local_docker_ops_agent(args.base_url)
+        assert_local_docker_transaction_management(args.tm_base_url)
+    except (RuntimeError, ValueError) as exc:
+        print(f"[PRECHECK] {exc}")
+        return 2
+
     cases = _load_manifest(args.manifest)
     reporter = E2EReporter(title="E2E Scenarios Report (31 Scenario Matrix)")
 
@@ -637,6 +651,7 @@ def run() -> int:
     report = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "base_url": args.base_url,
+        "tm_base_url": args.tm_base_url,
         "scenario_count": len(rows),
         "bucket_counts": {k: len(v) for k, v in by_bucket.items()},
         "status_counts": status_counts,
@@ -680,6 +695,7 @@ def run() -> int:
     stage_audit = {
         "generated_at": report["generated_at"],
         "base_url": args.base_url,
+        "tm_base_url": args.tm_base_url,
         "scenario_count": len(stage_rows),
         "rows": stage_rows,
     }

@@ -144,6 +144,7 @@ def _map_state_to_response(state: dict) -> dict:
         "transaction_id": state["transaction_id"],
         "status": state.get("status", "UNKNOWN"),
         "severity": state.get("severity", "LOW"),
+        "model_mode": state.get("model_mode", "agentic"),
         "confidence_score": state.get("confidence_score", 0.0),
         "step_count": state.get("step_count", 0),
         "max_steps": state.get("max_steps", 20),

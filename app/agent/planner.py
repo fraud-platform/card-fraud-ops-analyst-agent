@@ -185,6 +185,8 @@ async def _llm_planning(
         f"- {t['name']}: {t['description']}" for t in registry.list_tools()
     )
 
+    # SECURITY: state values are produced by internal investigation flow, not direct user input.
+    # Transaction context is sourced from authenticated TM service calls and controlled tool outputs.
     user_prompt = PLANNER_USER_TEMPLATE.format(
         transaction_id=state["transaction_id"],
         completed_steps=", ".join(state["completed_steps"]) or "none",

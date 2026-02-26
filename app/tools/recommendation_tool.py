@@ -108,6 +108,11 @@ class RecommendationTool(BaseTool):
                 "priority": c.priority,
                 "title": c.title,
                 "impact": c.impact,
+                # Keep payload for backward-compatible API/report consumers.
+                "payload": {
+                    "title": c.title,
+                    "impact": c.impact,
+                },
                 "signature_hash": c.signature_hash,
             }
             for c in candidates

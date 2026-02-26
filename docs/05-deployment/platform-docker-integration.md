@@ -22,7 +22,7 @@ First production-like target is the shared `card-fraud-platform` Docker stack.
 ## Health Endpoints
 
 - Liveness: `/api/v1/health`
-- Readiness: `/api/v1/readyz`
+- Readiness: `/api/v1/health/ready`
 
 ## Startup Order
 

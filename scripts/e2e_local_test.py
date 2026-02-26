@@ -22,12 +22,17 @@ from pathlib import Path
 
 import httpx
 
-from scripts.docker_guard import assert_local_docker_ops_agent
+from scripts.docker_guard import (
+    assert_local_docker_ops_agent,
+    assert_local_docker_transaction_management,
+)
 
 
 def _resolve_base_url() -> str:
     base_url = os.getenv("E2E_BASE_URL", "http://localhost:8003").strip()
+    tm_base_url = os.getenv("TM_BASE_URL", "http://localhost:8002").strip()
     assert_local_docker_ops_agent(base_url)
+    assert_local_docker_transaction_management(tm_base_url)
     return base_url
 
 

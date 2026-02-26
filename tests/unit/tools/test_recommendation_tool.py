@@ -128,6 +128,9 @@ class TestRecommendationTool:
         for rec in result["recommendations"]:
             assert "type" in rec
             assert "title" in rec
+            assert isinstance(rec.get("payload"), dict)
+            assert rec["payload"].get("title") == rec["title"]
+            assert rec["payload"].get("impact") == rec["impact"]
 
     @pytest.mark.asyncio
     async def test_execute_accepts_similarity_match_objects(self, initial_state):

@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.v1.common import ModelMode, Severity
+
 
 class RunRequest(BaseModel):
     transaction_id: str = Field(..., min_length=1, description="Transaction UUID")
@@ -58,7 +60,13 @@ class RecommendationSchema(BaseModel):
     priority: int = 0
     title: str
     impact: str
+    payload: dict[str, Any] = Field(default_factory=dict)
     signature_hash: str | None = None
+
+
+class InsightSummarySchema(BaseModel):
+    severity: Severity = Severity.LOW
+    summary: str = ""
 
 
 class InvestigationResponse(BaseModel):
@@ -66,6 +74,7 @@ class InvestigationResponse(BaseModel):
     transaction_id: str
     status: str
     severity: str
+    model_mode: ModelMode = ModelMode.AGENTIC
     confidence_score: float = Field(ge=0.0, le=1.0)
     step_count: int
     max_steps: int = 20
@@ -78,6 +87,7 @@ class InvestigationResponse(BaseModel):
 
 
 class InvestigationDetailResponse(InvestigationResponse):
+    insight: InsightSummarySchema = Field(default_factory=InsightSummarySchema)
     context: dict[str, Any] = Field(default_factory=dict)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     pattern_results: dict[str, Any] = Field(default_factory=dict)

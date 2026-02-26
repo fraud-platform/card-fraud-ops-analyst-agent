@@ -16,13 +16,13 @@ This document provides step-by-step procedures for common operational scenarios.
 
 ## Container Context (Platform Group)
 
-In local/shared platform environments, Ops Agent runs as the `ops-agent` container in
-`card-fraud-platform` using `docker-compose.yml` + `docker-compose.apps.yml` with `--profile apps`.
+In local/shared platform environments, Ops Agent runs as the `ops-analyst-agent` service in
+`card-fraud-platform` using `docker-compose.yml` + `docker-compose.apps.yml` with `--profile platform`.
 
 ```bash
 # From card-fraud-platform
-docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile apps ps ops-agent
-docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile apps logs -f ops-agent
+docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile platform ps ops-analyst-agent transaction-management
+docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile platform logs -f ops-analyst-agent
 ```
 
 Use these commands when reproducing operational issues locally. Kubernetes commands in this runbook
@@ -126,7 +126,9 @@ WHERE usename = 'ops_agent_app'
    ```
    Local platform alternative:
    ```bash
-   doppler run -- docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile apps up -d ops-agent
+   doppler run --project card-fraud-platform --config local -- \
+     docker compose -f docker-compose.yml -f docker-compose.apps.yml \
+     --profile platform up -d --build transaction-management ops-analyst-agent
    ```
 
    Important:

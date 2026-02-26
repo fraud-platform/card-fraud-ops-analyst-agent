@@ -24,7 +24,10 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from scripts.docker_guard import assert_local_docker_ops_agent
+from scripts.docker_guard import (
+    assert_local_docker_ops_agent,
+    assert_local_docker_transaction_management,
+)
 
 BASE_URL = os.getenv("E2E_BASE_URL", "http://localhost:8003")
 API_PREFIX = "/api/v1/ops-agent"
@@ -32,6 +35,7 @@ TM_BASE_URL = os.getenv("TM_BASE_URL", "http://localhost:8002")
 TIMEOUT = 180
 
 assert_local_docker_ops_agent(BASE_URL)
+assert_local_docker_transaction_management(TM_BASE_URL)
 
 
 @pytest.fixture(scope="module")

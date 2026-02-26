@@ -170,41 +170,43 @@ class InvestigationService:
         if state is None:
             # State not persisted (e.g. failed before first tool ran).
             # Return a response-compatible dict using DB row fields.
-            return {
-                "investigation_id": investigation.get("id", investigation_id),
-                "transaction_id": investigation.get("transaction_id", ""),
-                "status": investigation.get("status", "UNKNOWN"),
-                "severity": investigation.get("severity", "LOW"),
-                "confidence_score": float(investigation.get("final_confidence") or 0.0),
-                "step_count": investigation.get("step_count", 0),
-                "max_steps": investigation.get("max_steps", 20),
-                "planner_decisions": [],
-                "tool_executions": self._normalize_tool_executions(logged_executions),
-                "recommendations": [],
-                "started_at": str(investigation.get("started_at", "")),
-                "completed_at": investigation.get("completed_at"),
-                "total_duration_ms": None,
-                "context": {},
-                "evidence": [],
-                "pattern_results": {},
-                "similarity_results": {},
-                "reasoning": {},
-                "hypotheses": [],
-                "rule_draft": None,
-            }
+            return self._enrich_detail_response(
+                {
+                    "investigation_id": investigation.get("id", investigation_id),
+                    "transaction_id": investigation.get("transaction_id", ""),
+                    "status": investigation.get("status", "UNKNOWN"),
+                    "severity": investigation.get("severity", "LOW"),
+                    "confidence_score": float(investigation.get("final_confidence") or 0.0),
+                    "step_count": investigation.get("step_count", 0),
+                    "max_steps": investigation.get("max_steps", 20),
+                    "planner_decisions": [],
+                    "tool_executions": self._normalize_tool_executions(logged_executions),
+                    "recommendations": [],
+                    "started_at": str(investigation.get("started_at", "")),
+                    "completed_at": investigation.get("completed_at"),
+                    "total_duration_ms": None,
+                    "context": {},
+                    "evidence": [],
+                    "pattern_results": {},
+                    "similarity_results": {},
+                    "reasoning": {},
+                    "hypotheses": [],
+                    "rule_draft": None,
+                }
+            )
 
         merged = {**investigation, **state}
         state_executions = self._normalize_tool_executions(merged.get("tool_executions", []))
         if state_executions and self._has_rich_tool_io(state_executions):
             merged["tool_executions"] = state_executions
-            return merged
+            return self._enrich_detail_response(merged)
 
         logged_normalized = self._normalize_tool_executions(logged_executions)
         if logged_normalized and self._has_rich_tool_io(logged_normalized):
             merged["tool_executions"] = logged_normalized
         else:
             merged["tool_executions"] = state_executions
-        return merged
+        return self._enrich_detail_response(merged)
 
     async def resume_investigation(self, investigation_id: str) -> dict[str, Any]:
         """Resume a failed or interrupted investigation."""
@@ -573,6 +575,26 @@ class InvestigationService:
             settings=self._settings,
             state_store=self._state_store,
         )
+
+    def _enrich_detail_response(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Backfill stable API fields used by E2E and downstream report tooling."""
+        response = dict(payload)
+        response["model_mode"] = str(response.get("model_mode") or "agentic")
+
+        insight = response.get("insight")
+        insight_dict = insight if isinstance(insight, dict) else {}
+        severity = str(insight_dict.get("severity") or response.get("severity") or "LOW")
+
+        summary = insight_dict.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            reasoning = response.get("reasoning")
+            reasoning_dict = reasoning if isinstance(reasoning, dict) else {}
+            evidence = response.get("evidence")
+            evidence_list = evidence if isinstance(evidence, list) else []
+            summary = self._build_insight_summary(reasoning_dict, evidence_list)
+
+        response["insight"] = {"severity": severity, "summary": summary}
+        return response
 
     async def close(self) -> None:
         """Close resources."""

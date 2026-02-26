@@ -40,8 +40,14 @@ uv run pytest tests/unit -v
 uv run pytest tests/smoke -v
 uv run doppler-local-test
 
-# E2E scenario run (seed + matrix)
+# E2E prerequisite (from card-fraud-platform directory)
+doppler run --project card-fraud-platform --config local -- \
+  docker compose -f docker-compose.yml -f docker-compose.apps.yml \
+  --profile platform up -d --build transaction-management ops-analyst-agent
+
+# E2E scenario run (seed + suites)
 doppler run --config local -- uv run python scripts/seed_test_scenarios.py
+uv run pytest tests/e2e/test_scenarios.py -v
 uv run python scripts/run_e2e_matrix_detailed.py
 ```
 

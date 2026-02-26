@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.persistence.base import row_to_dict
+from app.persistence.query_builder import build_optional_equals_where
 from app.utils.clock import utc_now
 
 
@@ -142,17 +143,14 @@ class InvestigationRepository:
         transaction_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """List investigations with optional filters."""
-        conditions = []
-        params: dict[str, Any] = {"limit": limit, "offset": offset}
-
-        if status:
-            conditions.append("status = :status")
-            params["status"] = status
-        if transaction_id:
-            conditions.append("transaction_id = :txn_id")
-            params["txn_id"] = transaction_id
-
-        where_clause = " AND ".join(conditions) if conditions else "TRUE"
+        where_clause, filter_params = build_optional_equals_where(
+            {
+                "status": status,
+                "transaction_id": transaction_id,
+            },
+            param_aliases={"transaction_id": "txn_id"},
+        )
+        params: dict[str, Any] = {"limit": limit, "offset": offset, **filter_params}
         query = text(f"""
             SELECT * FROM fraud_gov.ops_agent_investigations
             WHERE {where_clause}
@@ -168,17 +166,13 @@ class InvestigationRepository:
         transaction_id: str | None = None,
     ) -> int:
         """Count investigations with optional filters."""
-        conditions = []
-        params: dict[str, Any] = {}
-
-        if status:
-            conditions.append("status = :status")
-            params["status"] = status
-        if transaction_id:
-            conditions.append("transaction_id = :txn_id")
-            params["txn_id"] = transaction_id
-
-        where_clause = " AND ".join(conditions) if conditions else "TRUE"
+        where_clause, params = build_optional_equals_where(
+            {
+                "status": status,
+                "transaction_id": transaction_id,
+            },
+            param_aliases={"transaction_id": "txn_id"},
+        )
         query = text(f"""
             SELECT COUNT(*) as count FROM fraud_gov.ops_agent_investigations
             WHERE {where_clause}

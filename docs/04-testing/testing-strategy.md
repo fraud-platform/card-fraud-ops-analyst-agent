@@ -33,13 +33,12 @@ If `local-test` is not available, use:
 doppler run --config local -- uv run pytest tests/integration -v
 ```
 
-## Current Validation Baseline (2026-02-22)
+## Validation Expectations
 
-- Lint: passing (`ruff check`)
-- Format: passing (`ruff format --check`)
-- Unit + smoke: passing in local verification
-- Integration: conditionally executed (DB/test config dependent)
-- E2E: 31-scenario matrix completed with updated HTML summary (`htmlcov/e2e-scenarios-report.html`)
+- Lint + format must pass before merge.
+- Unit + smoke are required on every change.
+- Integration runs when DB/test config is available.
+- E2E runs are required before release and for orchestration/tooling changes.
 
 ## Coverage
 
@@ -72,6 +71,8 @@ Open `htmlcov/index.html` in a browser for line/branch coverage review.
 ### E2E
 
 - Requires running Ops Agent + Transaction Management services and seeded data.
+- Local Docker dependencies must be healthy on `localhost:8002` (TM) and `localhost:8003` (Ops Agent).
+- Always rebuild/recreate `ops-analyst-agent` before final E2E verification to avoid stale-image false negatives.
 - Seed scenarios with `scripts/seed_test_scenarios.py` before running the suite.
 - Seed manifest (`htmlcov/e2e-seed-manifest.json`) is used for stable scenario transaction selection.
 - Validates scenario outcomes, worklist behavior, and acknowledgement flow.
@@ -79,6 +80,7 @@ Open `htmlcov/index.html` in a browser for line/branch coverage review.
 - `fraud_recall_medium_plus` is measured on high-confidence fraud seeds (card testing, velocity burst, cross-merchant spread, high-decline ratio), not mixed/advisory fraud scenarios.
 - Scenario assertions should focus on stable invariants (severity floor, recommendation behavior, response contracts) to avoid environment-specific false negatives.
 - HTML report `evidence_summary` is derived from `evidence_payload`; if no evidence is returned by API the field is intentionally `[]`.
+- `scripts/docker_guard.py` preflight enforces local Docker target correctness, TM dependency readiness, and stale-container detection before scenario execution.
 
 ## CI Guidance
 

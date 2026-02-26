@@ -21,7 +21,7 @@ Sibling repositories required (clone them at the same directory level):
 
 ```bash
 cd ../card-fraud-platform
-docker compose up -d
+doppler run --project card-fraud-platform --config local -- docker compose up -d
 # Wait for Postgres to be healthy before continuing
 docker compose ps
 ```
@@ -34,13 +34,19 @@ Verify the shared `fraud_gov` database is reachable before proceeding.
 # Infra services should be healthy (postgres, jaeger, prometheus, grafana)
 docker compose ps
 
-# Start app profile and verify ops-agent container membership/status
-doppler run -- docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile apps up -d
-docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile apps ps ops-agent
-docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile apps logs --tail 50 ops-agent
+# Start required app services and verify container membership/status
+doppler run --project card-fraud-platform --config local -- \
+  docker compose -f docker-compose.yml -f docker-compose.apps.yml \
+  --profile platform up -d --build transaction-management ops-analyst-agent
+docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile platform ps transaction-management ops-analyst-agent
+docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile platform logs --tail 50 ops-analyst-agent
+
+# Dependency readiness
+curl http://localhost:8002/api/v1/health
+curl http://localhost:8003/api/v1/health/ready
 ```
 
-Proceed only after shared infra services and `ops-agent` are up.
+Proceed only after shared infra services, `transaction-management`, and `ops-analyst-agent` are up.
 
 ### 2. Configure Doppler
 

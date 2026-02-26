@@ -2,11 +2,10 @@
 
 Autonomous fraud analyst assistant for the Card Fraud Platform. Generates explainable risk insights, analyst-ready recommendations, and draft rule packages from existing transaction data. All final decisions remain human-controlled.
 
-## Status
+## Runtime
 
-Agentic graph runtime: active.
-Quality gates: enforced via pre-commit/pre-push hooks and documented commands below.
-Latest matrix run: 31/31 scenarios completed on 2026-02-22 (`htmlcov/e2e-31-matrix-report-after-docker-fix.json` and `htmlcov/e2e-scenarios-report.html`).
+LangGraph agentic runtime is the active investigation path.
+Quality gates are enforced via pre-commit/pre-push hooks and the documented commands below.
 
 ## Stack
 
@@ -59,20 +58,26 @@ The Ops Analyst Agent is designed to run as part of the unified `card-fraud-plat
 cd ../card-fraud-platform
 
 # Start all infrastructure (Jaeger, Prometheus, Grafana, PostgreSQL, etc.)
-docker compose up -d
+doppler run --project card-fraud-platform --config local -- docker compose up -d
 
-# Start Ops Agent and other applications
-doppler run -- docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile apps up -d
+# Start required app services for investigation E2E
+doppler run --project card-fraud-platform --config local -- \
+  docker compose -f docker-compose.yml -f docker-compose.apps.yml \
+  --profile platform up -d --build transaction-management ops-analyst-agent
+
+# Verify dependencies
+curl http://localhost:8002/api/v1/health
+curl http://localhost:8003/api/v1/health/ready
 
 # View status
 docker compose ps
 ```
 
 Container context:
-- Ops Agent is defined in `docker-compose.apps.yml` under the `apps` profile.
+- Ops Agent and Transaction Management are defined in `docker-compose.apps.yml` under the `platform` profile.
 - Inspect only this app container with:
-  - `docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile apps ps ops-agent`
-  - `docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile apps logs -f ops-agent`
+  - `docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile platform ps ops-analyst-agent transaction-management`
+  - `docker compose -f docker-compose.yml -f docker-compose.apps.yml --profile platform logs -f ops-analyst-agent`
 
 ### Observability
 
@@ -124,10 +129,15 @@ uv run pre-commit install --hook-type pre-commit --hook-type pre-push
 uv run pre-commit run --all-files
 uv run pre-commit run --all-files --hook-stage pre-push
 
-# E2E (requires Dockerized ops-agent on port 8003 + DB)
+# E2E (requires Dockerized transaction-management on 8002 and ops-analyst-agent on 8003)
+doppler run --project card-fraud-platform --config local -- \
+  docker compose -f ../card-fraud-platform/docker-compose.yml \
+  -f ../card-fraud-platform/docker-compose.apps.yml \
+  --profile platform up -d --build transaction-management ops-analyst-agent
 doppler run --config local -- uv run python scripts/seed_test_scenarios.py   # Seed scenarios + manifest
 uv run e2e-local                                       # Local end-to-end test
-npx playwright open htmlcov/e2e-scenarios-report.html # Review custom HTML report
+uv run pytest tests/e2e/test_scenarios.py -v           # 23-scenario suite
+uv run python scripts/run_e2e_matrix_detailed.py       # 31-scenario matrix
 ```
 
 ## Project Structure

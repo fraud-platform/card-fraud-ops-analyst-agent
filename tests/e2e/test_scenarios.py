@@ -36,7 +36,10 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from scripts.docker_guard import assert_local_docker_ops_agent
+from scripts.docker_guard import (
+    assert_local_docker_ops_agent,
+    assert_local_docker_transaction_management,
+)
 from tests.e2e.reporter import E2EReporter
 
 
@@ -45,12 +48,13 @@ def _resolve_base_url() -> str:
     parsed = urlparse(base_url)
     if (parsed.hostname or "").lower() in {"localhost", "127.0.0.1"}:
         assert_local_docker_ops_agent(base_url)
+        assert_local_docker_transaction_management(TM_BASE_URL)
     return base_url
 
 
+TM_BASE_URL = os.getenv("TM_BASE_URL", "http://localhost:8002").strip()
 BASE_URL = _resolve_base_url()
 API_PREFIX = "/api/v1/ops-agent"
-TM_BASE_URL = os.getenv("TM_BASE_URL", "http://localhost:8002")
 TIMEOUT = 180
 REPORT_PATH = Path("htmlcov/e2e-scenarios-report.html")
 VECTOR_ENABLED = os.getenv("VECTOR_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}

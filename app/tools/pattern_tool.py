@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.agent.state import update_state
 from app.core.config import get_settings
 from app.core.errors import ToolPreconditionError
 from app.tools._core.pattern_logic import (
@@ -12,6 +11,7 @@ from app.tools._core.pattern_logic import (
     run_pattern_scoring,
 )
 from app.tools.base import BaseTool
+from app.tools.evidence import EvidenceEntry, append_evidence
 from app.utils.dataclass_utils import to_dict_list
 
 if TYPE_CHECKING:
@@ -65,16 +65,16 @@ class PatternTool(BaseTool):
 
         severity = compute_severity(scores)
 
-        evidence_entry = {
-            "category": "pattern_analysis",
-            "tool": "pattern_tool",
-            "description": f"Detected {len(pattern_results['patterns_detected'])} fraud patterns",
-            "data": pattern_results,
-        }
+        evidence_entry = EvidenceEntry(
+            category="pattern_analysis",
+            tool=self.name,
+            description=f"Detected {len(pattern_results['patterns_detected'])} fraud patterns",
+            data=pattern_results,
+        )
 
-        return update_state(
+        return append_evidence(
             state,
+            evidence_entry,
             pattern_results=pattern_results,
-            evidence=[*state["evidence"], evidence_entry],
             severity=severity,
         )
