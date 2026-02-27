@@ -93,7 +93,11 @@ class TMClient:
     - get_card_history() — paginated card history
     - get_merchant_history() — paginated merchant history
     - health_check() — TM API liveness
+
+    Includes in-memory caching for card/merchant history to reduce repeated calls.
     """
+
+    _CACHE_TTL_SECONDS = 300  # 5 minutes
 
     def __init__(self, config: TMClientConfig) -> None:
         self._base_url = config.base_url.rstrip("/")
@@ -107,6 +111,9 @@ class TMClient:
         self._consecutive_failures = 0
         self._circuit_open_until: float = 0.0
 
+        # Simple in-memory cache for card/merchant history
+        self._history_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=self._timeout)
@@ -117,6 +124,19 @@ class TMClient:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+        self._history_cache.clear()
+
+    def _get_cached_history(self, cache_key: str) -> list[dict[str, Any]] | None:
+        """Get cached history if still valid."""
+        if cache_key in self._history_cache:
+            cached_time, cached_data = self._history_cache[cache_key]
+            if time.time() - cached_time < self._CACHE_TTL_SECONDS:
+                return cached_data
+        return None
+
+    def _set_cached_history(self, cache_key: str, data: list[dict[str, Any]]) -> None:
+        """Cache history data."""
+        self._history_cache[cache_key] = (time.time(), data)
 
     # ------------------------------------------------------------------
     # Public API
@@ -183,14 +203,22 @@ class TMClient:
         """GET /api/v1/transactions?card_id=X&from_date=Y&page_size=500
 
         Auto-paginates up to 3 pages (1500 transactions max).
+        Results are cached for 5 minutes to reduce repeated calls.
         """
+        cache_key = f"card:{card_id}:{hours_back}:{from_date or 'default'}"
+        cached = self._get_cached_history(cache_key)
+        if cached is not None:
+            return cached
+
         if from_date is None:
             cutoff = utc_now() - timedelta(hours=hours_back)
             from_date = cutoff.isoformat()
 
-        return await self._paginated_list(
+        result = await self._paginated_list(
             params={"card_id": card_id, "from_date": from_date, "page_size": _PAGE_SIZE},
         )
+        self._set_cached_history(cache_key, result)
+        return result
 
     async def get_merchant_history(
         self,
@@ -202,14 +230,22 @@ class TMClient:
         """GET /api/v1/transactions?merchant_id=X&from_date=Y&page_size=500
 
         Auto-paginates up to 3 pages (1500 transactions max).
+        Results are cached for 5 minutes to reduce repeated calls.
         """
+        cache_key = f"merchant:{merchant_id}:{hours_back}:{from_date or 'default'}"
+        cached = self._get_cached_history(cache_key)
+        if cached is not None:
+            return cached
+
         if from_date is None:
             cutoff = utc_now() - timedelta(hours=hours_back)
             from_date = cutoff.isoformat()
 
-        return await self._paginated_list(
+        result = await self._paginated_list(
             params={"merchant_id": merchant_id, "from_date": from_date, "page_size": _PAGE_SIZE},
         )
+        self._set_cached_history(cache_key, result)
+        return result
 
     async def health_check(self) -> bool:
         """GET /api/v1/health — returns True if TM API is reachable."""

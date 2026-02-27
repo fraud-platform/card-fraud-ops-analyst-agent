@@ -42,7 +42,7 @@ class EmbeddingClient:
         if config.api_key and config.api_key.get_secret_value():
             headers["Authorization"] = f"Bearer {config.api_key.get_secret_value()}"
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             response = await client.post(
                 url,
                 json={
@@ -54,11 +54,20 @@ class EmbeddingClient:
             response.raise_for_status()
             payload = response.json()
 
+        embedding: list[float] | None = None
         embeddings = payload.get("embeddings")
-        if not isinstance(embeddings, list) or not embeddings:
-            raise ValueError("Embedding provider returned invalid embedding payload")
-        embedding = embeddings[0]
-        if not isinstance(embedding, list) or not embedding:
+        if isinstance(embeddings, list) and embeddings:
+            first = embeddings[0]
+            if isinstance(first, list) and first:
+                embedding = [float(v) for v in first]
+
+        if embedding is None:
+            single = payload.get("embedding")
+            if isinstance(single, list) and single:
+                embedding = [float(v) for v in single]
+
+        if embedding is None:
             raise ValueError("Embedding provider returned invalid embedding payload")
 
-        return EmbeddingResponse(embedding=[float(v) for v in embedding], model=config.model_name)
+        model_name = str(payload.get("model") or config.model_name)
+        return EmbeddingResponse(embedding=embedding, model=model_name)

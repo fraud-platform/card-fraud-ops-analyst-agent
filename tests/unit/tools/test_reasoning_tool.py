@@ -382,6 +382,59 @@ class TestReasoningTool:
         assert reasoning["severity_calibration"] == "counter_evidence_no_pattern_cap"
 
     @pytest.mark.asyncio
+    async def test_execute_raises_low_to_medium_for_high_decline_velocity_combo(
+        self, initial_state
+    ):
+        """LOW should be elevated when decline+velocity/card-testing signals are jointly strong."""
+        from langchain_core.messages import AIMessage
+
+        state = {
+            **initial_state,
+            "context": {
+                "transaction": {
+                    "transaction_id": "txn-floor-2",
+                    "amount": 325.0,
+                    "currency": "USD",
+                    "merchant_id": "merchant-decline",
+                    "card_id": "card-decline",
+                    "decision": "APPROVE",
+                },
+                "transaction_context": {},
+                "rule_matches": [],
+            },
+            "pattern_results": {
+                "scores": [
+                    {"pattern_name": "velocity", "score": 0.7, "weight": 0.4, "details": {}},
+                    {"pattern_name": "decline_anomaly", "score": 0.9, "weight": 0.3, "details": {}},
+                    {"pattern_name": "card_testing", "score": 0.7, "weight": 0.35, "details": {}},
+                ],
+                "overall_score": 0.40,
+                "patterns_detected": ["velocity", "decline_anomaly", "card_testing"],
+            },
+            "similarity_results": {
+                "matches": [{"transaction_id": "hist-1", "score": 0.35}],
+                "overall_score": 0.35,
+            },
+        }
+
+        mock_llm = AsyncMock()
+        mock_llm.ainvoke.return_value = AIMessage(
+            content=(
+                '{"narrative":"High velocity but strong counter evidence; risk likely low.",'
+                '"risk_level":"LOW","key_findings":["velocity spike"],'
+                '"hypotheses":[],"confidence":0.55}'
+            )
+        )
+        tool = ReasoningTool(llm=mock_llm)
+
+        result = await tool.execute(state)
+
+        reasoning = result["reasoning"]
+        assert result["severity"] == "MEDIUM"
+        assert reasoning["llm_risk_level"] == "LOW"
+        assert reasoning["severity_calibration"] == "counter_evidence_no_pattern_cap"
+
+    @pytest.mark.asyncio
     async def test_execute_rewrites_low_risk_language_for_medium_severity(self, initial_state):
         """Medium severity output should not retain explicit low-risk/no-pattern phrasing."""
         from langchain_core.messages import AIMessage

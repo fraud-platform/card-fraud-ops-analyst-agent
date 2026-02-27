@@ -10,6 +10,7 @@ from sqlalchemy import text
 from app.core.config import AppEnvironment, get_settings
 from app.core.database import get_engine
 from app.core.metrics import ops_agent_db_query_failures_total, ops_agent_db_query_latency_seconds
+from app.core.tracing import get_tracing_headers
 from app.schemas.v1.health import HealthResponse, ReadyResponse
 
 router = APIRouter(tags=["health"])
@@ -94,12 +95,41 @@ async def _check_embedding_service(settings) -> bool | None:
         return None
 
     try:
-        timeout = httpx.Timeout(5.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        timeout = httpx.Timeout(8.0)
+        headers: dict[str, str] = {**get_tracing_headers()}
+        if config.api_key and config.api_key.get_secret_value():
+            headers["Authorization"] = f"Bearer {config.api_key.get_secret_value()}"
+
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             base_url = config.api_base.rstrip("/")
-            response = await client.get(f"{base_url}/", follow_redirects=True)
+            response = await client.post(
+                f"{base_url}/embed",
+                json={"model": config.model_name, "input": "ready-check"},
+                headers=headers,
+            )
+            if response.status_code == 200:
+                payload = response.json() if response.content else {}
+                embeddings = payload.get("embeddings")
+                if isinstance(embeddings, list) and embeddings:
+                    first = embeddings[0]
+                    if isinstance(first, list) and first:
+                        return True
+                embedding = payload.get("embedding")
+                if isinstance(embedding, list) and embedding:
+                    return True
+                logger.warning(
+                    "Embedding service readiness payload missing embedding vectors",
+                    extra={"status_code": response.status_code},
+                )
+                return False
+
             if response.status_code < 500:
-                return True
+                logger.warning(
+                    "Embedding service readiness failed with non-server status",
+                    extra={"status_code": response.status_code},
+                )
+                return False
+
             logger.warning(
                 "Embedding service health check returned error status",
                 extra={"status_code": response.status_code},

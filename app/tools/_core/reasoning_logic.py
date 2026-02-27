@@ -382,6 +382,35 @@ def assemble_prompt_payload(
 
     observations = _observation_lines(context)
 
+    features = context.get("features", {})
+    features_text = "None available"
+    if features:
+        feature_lines = []
+        for key, value in [
+            ("transaction_id", "txn_id"),
+            ("amount", "amt"),
+            ("currency", "curr"),
+            ("decision", "decision"),
+            ("mcc", "mcc"),
+            ("timestamp", "ts"),
+            ("card_id", "card"),
+            ("merchant_id", "mcht"),
+            ("txn_count_5m", "cnt_5m"),
+            ("txn_count_1h", "cnt_1h"),
+            ("txn_count_24h", "cnt_24h"),
+            ("decline_rate_1h", "decl_1h%"),
+            ("avg_amount_30d", "avg_30d"),
+            ("amount_zscore", "zscore"),
+            ("distinct_merchants_1h", "uniq_mcht_1h"),
+            ("distinct_cards_1h", "uniq_card_1h"),
+            ("ip_address", "ip"),
+            ("ip_country_alpha3", "ip_ctry"),
+            ("device_id", "dev_id"),
+        ]:
+            if features.get(key) is not None:
+                feature_lines.append(f"  - {value}: {features[key]}")
+        features_text = "\n".join(feature_lines) if feature_lines else "No features computed"
+
     return {
         "transaction_id": transaction.get("transaction_id", "unknown"),
         "card_id": transaction.get("card_id", "unknown"),
@@ -412,6 +441,7 @@ def assemble_prompt_payload(
         "conflict_matrix": json.dumps(conflict_matrix) if conflict_matrix else "Not computed",
         "insight_summary": context.get("insight_summary", ""),
         "observations": observations,
+        "context_features": features_text,
     }
 
 
@@ -496,7 +526,21 @@ def validate_llm_output(parsed: dict[str, Any]) -> tuple[dict[str, Any], list[st
     if isinstance(hypotheses, list):
         sanitized_hypotheses = []
         for i, hyp in enumerate(hypotheses[:MAX_HYPOTHESES_COUNT]):
-            if isinstance(hyp, str):
+            if isinstance(hyp, dict):
+                sanitized_hyp: dict[str, Any] = {}
+                if h := hyp.get("hypothesis"):
+                    sanitized_hyp["hypothesis"] = str(h)[:300]
+                if conf := hyp.get("confidence"):
+                    try:
+                        sanitized_hyp["confidence"] = max(0.0, min(1.0, float(conf)))
+                    except TypeError, ValueError:
+                        sanitized_hyp["confidence"] = 0.5
+                if sup := hyp.get("supporting_evidence"):
+                    sanitized_hyp["supporting_evidence"] = sup if isinstance(sup, list) else []
+                if con := hyp.get("contradicting_evidence"):
+                    sanitized_hyp["contradicting_evidence"] = con if isinstance(con, list) else []
+                sanitized_hypotheses.append(sanitized_hyp)
+            elif isinstance(hyp, str):
                 clean_hyp = hyp[:300]
                 if scan_for_injection(clean_hyp):
                     clean_hyp = "[hypothesis sanitized]"
@@ -509,6 +553,34 @@ def validate_llm_output(parsed: dict[str, Any]) -> tuple[dict[str, Any], list[st
         sanitized["hypotheses"] = sanitized_hypotheses
     else:
         sanitized["hypotheses"] = []
+
+    known_facts = parsed.get("known_facts", [])
+    if isinstance(known_facts, list):
+        sanitized["known_facts"] = [str(f)[:200] for f in known_facts if isinstance(f, str)][:10]
+    else:
+        sanitized["known_facts"] = []
+
+    unknowns = parsed.get("unknowns", [])
+    if isinstance(unknowns, list):
+        sanitized["unknowns"] = [str(u)[:200] for u in unknowns if isinstance(u, str)][:10]
+    else:
+        sanitized["unknowns"] = []
+
+    what_would_change_mind = parsed.get("what_would_change_mind", [])
+    if isinstance(what_would_change_mind, list):
+        sanitized["what_would_change_mind"] = [
+            str(w)[:200] for w in what_would_change_mind if isinstance(w, str)
+        ][:10]
+    else:
+        sanitized["what_would_change_mind"] = []
+
+    evidence_citations = parsed.get("evidence_citations", [])
+    if isinstance(evidence_citations, list):
+        sanitized["evidence_citations"] = [
+            str(c)[:200] for c in evidence_citations if isinstance(c, str)
+        ][:20]
+    else:
+        sanitized["evidence_citations"] = []
 
     for sensitive_key in ("system", "instruction", "override", "password", "secret", "token"):
         if sensitive_key in sanitized:

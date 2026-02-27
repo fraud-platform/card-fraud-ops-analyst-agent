@@ -25,6 +25,7 @@ Documentation-first repository for enterprise-grade ops analyst agent implementa
 - `02-development/architecture.md`
 - `02-development/domain-and-data-model.md`
 - `02-development/agent-workflow-and-orchestration.md`
+- `02-development/agentic-improvement-plan-phase0-2.md`
 - `02-development/storage-and-migrations.md`
 - `02-development/idempotency-and-replay.md`
 - `02-development/performance-patterns.md`

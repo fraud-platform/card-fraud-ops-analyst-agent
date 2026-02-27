@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -106,23 +107,55 @@ class SimilarityTool(BaseTool):
                 investigation_id=state.get("investigation_id"),
                 error=str(exc),
             )
-            result_payload = {
-                "matches": [],
-                "overall_score": 0.0,
-                "skipped": True,
-                "vector_diagnostics": {
-                    "enabled": True,
+            embedding_error = str(exc)[:240]
+            try:
+                heuristic_rows = await self._query_similar_heuristic(
+                    transaction=context.get("transaction", {}),
+                    limit=settings.vector_search.search_limit,
+                    exclude_transaction_pk_id=context.get("transaction_pk_id"),
+                )
+                heuristic_result = evaluate_similarity(
+                    transaction=context.get("transaction", {}),
+                    similar_transactions=heuristic_rows,
+                )
+                result_payload = to_dict(heuristic_result)
+                candidate_count = len(heuristic_rows)
+                match_count = len(heuristic_result.matches)
+                result_payload["vector_diagnostics"] = {
+                    "enabled": False,
+                    "fallback_strategy": "sql_heuristic",
                     "embedding_model": embedding_model,
                     "embedding_dimension": embedding_dimension,
-                    "candidate_count": 0,
+                    "candidate_count": candidate_count,
                     "search_limit": settings.vector_search.search_limit,
                     "min_similarity": settings.vector_search.min_similarity,
-                    "reason": "embedding_or_similarity_failed",
-                    "error": str(exc)[:240],
-                },
-            }
-            candidate_count = 0
-            match_count = 0
+                    "reason": "heuristic_fallback_active",
+                    "embedding_error": embedding_error,
+                }
+            except Exception as fallback_exc:
+                await self._session.rollback()
+                logger.warning(
+                    "Similarity heuristic fallback failed, returning empty result",
+                    investigation_id=state.get("investigation_id"),
+                    error=str(fallback_exc),
+                )
+                result_payload = {
+                    "matches": [],
+                    "overall_score": 0.0,
+                    "skipped": True,
+                    "vector_diagnostics": {
+                        "enabled": True,
+                        "embedding_model": embedding_model,
+                        "embedding_dimension": embedding_dimension,
+                        "candidate_count": 0,
+                        "search_limit": settings.vector_search.search_limit,
+                        "min_similarity": settings.vector_search.min_similarity,
+                        "reason": "embedding_or_similarity_failed",
+                        "error": f"{embedding_error}; fallback={str(fallback_exc)[:120]}",
+                    },
+                }
+                candidate_count = 0
+                match_count = 0
 
         evidence_entry = EvidenceEntry(
             category="similarity_analysis",
@@ -226,4 +259,121 @@ class SimilarityTool(BaseTool):
                 "exclude_txn_pk": exclude_transaction_pk_id,
             },
         )
-        return [row_to_dict(r) for r in result.fetchall()]
+        rows = result.fetchall()
+        if inspect.isawaitable(rows):
+            rows = await rows
+        return [row_to_dict(r) for r in rows]
+
+    async def _query_similar_heuristic(
+        self,
+        transaction: dict[str, Any] | Any,
+        limit: int,
+        exclude_transaction_pk_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fallback candidate retrieval when vector embedding/search is unavailable."""
+        if hasattr(transaction, "__dataclass_fields__"):
+            import dataclasses
+
+            transaction = dataclasses.asdict(transaction)
+
+        txn = transaction if isinstance(transaction, dict) else {}
+        card_id = txn.get("card_id")
+        merchant_id = txn.get("merchant_id")
+        decision = txn.get("decision") or txn.get("status")
+        amount_raw = txn.get("amount", 0)
+        try:
+            amount = float(amount_raw or 0.0)
+        except TypeError, ValueError:
+            amount = 0.0
+
+        amount_min = amount * 0.75 if amount > 0 else None
+        amount_max = amount * 1.25 if amount > 0 else None
+        effective_limit = max(int(limit or 20), 20) * 5
+
+        query = text("""
+            SELECT
+                t.transaction_id::text AS transaction_id,
+                t.transaction_amount AS amount,
+                t.card_id,
+                t.merchant_id,
+                t.decision,
+                CASE
+                    WHEN lower(coalesce(t.transaction_context->>'3ds_verified', '')) IN ('true', 't', '1', 'yes', 'y')
+                        THEN TRUE
+                    ELSE FALSE
+                END AS three_ds_authenticated,
+                CASE
+                    WHEN lower(coalesce(t.transaction_context->>'trusted_device', '')) IN ('true', 't', '1', 'yes', 'y')
+                        THEN TRUE
+                    ELSE FALSE
+                END AS is_trusted_device,
+                CASE
+                    WHEN lower(coalesce(t.transaction_context->>'avs_match', '')) IN ('true', 't', '1', 'yes', 'y')
+                        THEN TRUE
+                    ELSE FALSE
+                END AS avs_match,
+                CASE
+                    WHEN lower(coalesce(t.transaction_context->>'cvv_match', '')) IN ('true', 't', '1', 'yes', 'y')
+                        THEN TRUE
+                    ELSE FALSE
+                END AS cvv_match,
+                CASE
+                    WHEN lower(coalesce(t.transaction_context->>'tokenized', '')) IN ('true', 't', '1', 'yes', 'y')
+                        THEN TRUE
+                    WHEN lower(coalesce(t.transaction_context->>'payment_token_present', '')) IN ('true', 't', '1', 'yes', 'y')
+                        THEN TRUE
+                    ELSE FALSE
+                END AS is_tokenized,
+                CASE
+                    WHEN lower(coalesce(t.transaction_context->>'cardholder_present', '')) IN ('true', 't', '1', 'yes', 'y')
+                        THEN TRUE
+                    ELSE FALSE
+                END AS cardholder_present,
+                CASE
+                    WHEN lower(coalesce(t.transaction_context->>'known_merchant', '')) IN ('true', 't', '1', 'yes', 'y')
+                        THEN TRUE
+                    ELSE FALSE
+                END AS is_known_merchant,
+                t.transaction_context AS metadata
+            FROM fraud_gov.transactions t
+            WHERE (
+                    CAST(:exclude_txn_pk AS text) IS NULL
+                    OR t.id::text <> CAST(:exclude_txn_pk AS text)
+            )
+              AND (
+                    (CAST(:card_id AS text) IS NOT NULL AND t.card_id::text = CAST(:card_id AS text))
+                    OR (
+                        CAST(:merchant_id AS text) IS NOT NULL
+                        AND t.merchant_id::text = CAST(:merchant_id AS text)
+                    )
+                    OR (
+                        CAST(:amount_min AS numeric) IS NOT NULL
+                        AND CAST(:amount_max AS numeric) IS NOT NULL
+                        AND t.transaction_amount BETWEEN
+                            CAST(:amount_min AS numeric) AND CAST(:amount_max AS numeric)
+                    )
+                    OR (
+                        CAST(:decision AS text) IS NOT NULL
+                        AND t.decision::text = CAST(:decision AS text)
+                    )
+              )
+            ORDER BY t.created_at DESC
+            LIMIT :limit
+        """)
+
+        result = await self._session.execute(
+            query,
+            {
+                "exclude_txn_pk": exclude_transaction_pk_id,
+                "card_id": card_id,
+                "merchant_id": merchant_id,
+                "amount_min": amount_min,
+                "amount_max": amount_max,
+                "decision": decision,
+                "limit": effective_limit,
+            },
+        )
+        rows = result.fetchall()
+        if inspect.isawaitable(rows):
+            rows = await rows
+        return [row_to_dict(r) for r in rows]

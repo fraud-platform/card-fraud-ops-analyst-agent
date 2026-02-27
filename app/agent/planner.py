@@ -83,6 +83,12 @@ async def planner_node(
     with tracer.start_as_current_span("agent.planner") as span:
         span.set_attribute("investigation_id", state["investigation_id"])
         span.set_attribute("step_count", state["step_count"])
+        if state.get("transaction_id"):
+            span.set_attribute("transaction_id", state["transaction_id"])
+        model_mode = state.get("model_mode", "unknown")
+        span.set_attribute("model_mode", model_mode)
+        if state.get("scenario_name"):
+            span.set_attribute("scenario_name", state["scenario_name"])
 
         has_context = bool(state.get("context"))
         valid_tools = set(registry.tool_names) | {"COMPLETE"} if registry else {"COMPLETE"}

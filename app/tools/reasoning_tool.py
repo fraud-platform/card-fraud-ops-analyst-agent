@@ -41,17 +41,33 @@ You must respond with a JSON object containing:
   "narrative": "<concise explanation of findings>",
   "risk_level": "CRITICAL|HIGH|MEDIUM|LOW",
   "key_findings": ["<finding 1>", "<finding 2>", ...],
-  "hypotheses": ["<hypothesis 1>", ...],
-  "confidence": <0.0-1.0>
+  "hypotheses": [
+    {
+      "hypothesis": "<hypothesis description>",
+      "confidence": <0.0-1.0>,
+      "supporting_evidence": ["<evidence ref 1>", ...],
+      "contradicting_evidence": ["<evidence ref 1>", ...]
+    },
+    ...
+  ],
+  "known_facts": ["<fact 1 from context.features>", ...],
+  "unknowns": ["<explicitly unknown item 1>", ...],
+  "what_would_change_mind": ["<evidence that would change assessment>", ...],
+  "confidence": <0.0-1.0>,
+  "evidence_citations": ["<citation to tool output>", ...]
 }
 
 Response formatting requirements:
 - Return RAW JSON only (no markdown, no code fences, no commentary).
 - Keep narrative concise (max 320 characters).
 - Keep key_findings to at most 5 short items.
-- Keep hypotheses to at most 3 short items.
+- Keep 2-4 hypotheses with individual confidence scores.
+- Known facts must reference specific fields from context.features (e.g., "txn_count_1h=6", "amount_zscore=2.3").
+- Each hypothesis must cite supporting and contradicting evidence by referencing tool outputs.
+- Explicitly list unknowns when evidence is missing.
+- List what evidence would change your mind in "what_would_change_mind".
 
-If evidence is insufficient, explicitly state that in narrative/key_findings.
+If evidence is insufficient, explicitly state that in narrative/key_findings and populate "unknowns".
 Do not speculate beyond the provided data.
 """
 
@@ -423,6 +439,20 @@ class ReasoningTool(BaseTool):
         similarity_score, similarity_match_count = cls._similarity_summary(state)
         similarity_has_counter_evidence = cls._similarity_has_counter_evidence(state)
         counter_evidence_count = cls._counter_evidence_count(state)
+        score_by_name: dict[str, float] = {}
+        for row in cls._pattern_rows(state):
+            name = row.get("pattern_name")
+            if not isinstance(name, str):
+                continue
+            try:
+                score_by_name[name] = float(row.get("score", 0.0) or 0.0)
+            except TypeError, ValueError:
+                score_by_name[name] = 0.0
+        critical_pattern_score = max(
+            score_by_name.get("velocity", 0.0),
+            score_by_name.get("decline_anomaly", 0.0),
+            score_by_name.get("card_testing", 0.0),
+        )
         context = state.get("context", {}) if isinstance(state, dict) else {}
         context_dict = context if isinstance(context, dict) else {}
         rule_matches = context_dict.get("rule_matches", [])
@@ -430,7 +460,8 @@ class ReasoningTool(BaseTool):
         decision = cls._decision(state)
 
         has_strong_counter_evidence = (
-            max_pattern_score <= 0.45
+            max_pattern_score <= 0.60
+            and critical_pattern_score <= 0.55
             and similarity_score <= 0.7
             and similarity_match_count <= 10
             and rule_match_count <= 1
@@ -442,6 +473,18 @@ class ReasoningTool(BaseTool):
 
         if normalized in {"MEDIUM", "HIGH"} and has_strong_counter_evidence:
             return "LOW"
+
+        # Guardrail: prevent LOW classification when multiple high-risk patterns align.
+        has_high_risk_pattern_combo = score_by_name.get("decline_anomaly", 0.0) >= 0.85 and (
+            score_by_name.get("velocity", 0.0) >= 0.65
+            or score_by_name.get("card_testing", 0.0) >= 0.65
+        )
+        if (
+            normalized == "LOW"
+            and has_high_risk_pattern_combo
+            and (similarity_score >= 0.3 or rule_match_count >= 1)
+        ):
+            return "MEDIUM"
 
         # Keep a minimum severity when transaction was declined and one strong fraud pattern exists.
         if (

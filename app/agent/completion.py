@@ -97,6 +97,12 @@ async def completion_node(
     with tracer.start_as_current_span("agent.completion") as span:
         investigation_id = state["investigation_id"]
         span.set_attribute("investigation_id", investigation_id)
+        if state.get("transaction_id"):
+            span.set_attribute("transaction_id", state["transaction_id"])
+        model_mode = state.get("model_mode", "unknown")
+        span.set_attribute("model_mode", model_mode)
+        if state.get("scenario_name"):
+            span.set_attribute("scenario_name", state["scenario_name"])
 
         completed_at = utc_now().isoformat()
 

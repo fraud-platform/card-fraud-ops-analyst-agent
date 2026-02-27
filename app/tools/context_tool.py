@@ -7,12 +7,13 @@ in a single call, then parallel-fetches card and merchant history.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from app.agent.state import update_state
-from app.tools._core.context_logic import assemble_context
+from app.tools._core.context_logic import assemble_context, compute_context_features
 from app.tools.base import BaseTool
 
 if TYPE_CHECKING:
@@ -40,7 +41,7 @@ class ContextTool(BaseTool):
         self._tm_client = tm_client
 
     async def execute(self, state: InvestigationState) -> InvestigationState:
-        # Skip TM calls on resume if context already populated (TDD-007 §9.8)
+        # Skip TM calls on resume if context already populated (TDD-007 sec. 9.8)
         if state.get("context") and state["context"].get("transaction"):
             logger.info(
                 "Context already populated, skipping TM API calls",
@@ -50,7 +51,7 @@ class ContextTool(BaseTool):
 
         transaction_id = state["transaction_id"]
 
-        # Single overview call replaces 5 old ContextReader methods (TDD-007 §2.2)
+        # Single overview call replaces 5 old ContextReader methods (TDD-007 sec. 2.2)
         overview = await self._tm_client.get_transaction_overview(
             transaction_id, include_rules=True
         )
@@ -58,15 +59,16 @@ class ContextTool(BaseTool):
         transaction = overview.get("transaction", {})
         card_id = transaction.get("card_id")
         merchant_id = transaction.get("merchant_id")
+        history_from_date = self._history_from_date(transaction)
 
-        # Parallel fetch card + merchant history (TDD-007 §7)
+        # Parallel fetch card + merchant history (TDD-007 sec. 7)
         card_task = (
-            self._tm_client.get_card_history(card_id, hours_back=72)
+            self._tm_client.get_card_history(card_id, from_date=history_from_date)
             if card_id
             else self._empty_list()
         )
         merchant_task = (
-            self._tm_client.get_merchant_history(merchant_id, hours_back=72)
+            self._tm_client.get_merchant_history(merchant_id, from_date=history_from_date)
             if merchant_id
             else self._empty_list()
         )
@@ -88,6 +90,17 @@ class ContextTool(BaseTool):
             notes=overview.get("notes", []),
             case=overview.get("case"),
         )
+
+        features = compute_context_features(
+            context=context,
+            windows=context.get("windows", {}),
+            card_history=card_history,
+            merchant_history=merchant_history,
+            transaction=transaction,
+            transaction_context=context.get("transaction_context", {}),
+            velocity_snapshot=context.get("velocity_snapshot", {}),
+        )
+        context["features"] = features
 
         logger.info(
             "Context assembled",
@@ -113,3 +126,21 @@ class ContextTool(BaseTool):
         if isinstance(result, Exception):
             logger.warning(f"Failed to fetch {label}", error=str(result), **log_context)
         return []
+
+    @staticmethod
+    def _history_from_date(transaction: dict[str, Any], lookback_days: int = 30) -> str | None:
+        """Anchor history windows to transaction timestamp for stable replay."""
+        raw_timestamp = transaction.get("transaction_timestamp")
+        if not isinstance(raw_timestamp, str) or not raw_timestamp.strip():
+            return None
+
+        normalized = raw_timestamp.strip().replace("Z", "+00:00")
+        try:
+            tx_timestamp = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+
+        if tx_timestamp.tzinfo is None:
+            tx_timestamp = tx_timestamp.replace(tzinfo=UTC)
+
+        return (tx_timestamp - timedelta(days=lookback_days)).isoformat()

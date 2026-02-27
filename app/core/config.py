@@ -328,9 +328,33 @@ class VectorSearchConfig(BaseSettings):
     @model_validator(mode="after")
     def fill_ollama_api_key(self) -> VectorSearchConfig:
         if not self.api_key.get_secret_value():
-            ollama_key = os.getenv("OLLAMA_API_KEY", "")
-            if ollama_key:
-                self.api_key = SecretStr(ollama_key)
+            for env_name in ("VECTOR_API_KEY", "OLLAMA_API_KEY", "LLM_API_KEY"):
+                api_key = os.getenv(env_name, "")
+                if api_key:
+                    self.api_key = SecretStr(api_key)
+                    break
+        return self
+
+    @model_validator(mode="after")
+    def align_with_llm_base_url(self) -> VectorSearchConfig:
+        """Default vector API base to LLM cloud base when VECTOR_API_BASE is unset."""
+        if os.getenv("VECTOR_API_BASE"):
+            return self
+
+        current = self.api_base.strip().lower()
+        is_local_default = "localhost" in current or "127.0.0.1" in current
+        if not is_local_default:
+            return self
+
+        llm_base = (os.getenv("LLM_BASE_URL", "") or "").strip().rstrip("/")
+        if not llm_base:
+            return self
+
+        llm_base_lower = llm_base.lower()
+        if "localhost" in llm_base_lower or "127.0.0.1" in llm_base_lower:
+            return self
+
+        self.api_base = llm_base if llm_base.endswith("/api") else f"{llm_base}/api"
         return self
 
     @model_validator(mode="after")

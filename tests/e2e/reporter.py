@@ -54,11 +54,12 @@ class ScenarioResult:
 class E2EReporter:
     """Collects stage data and generates a custom HTML report."""
 
-    def __init__(self, title: str = "E2E Test Report") -> None:
+    def __init__(self, title: str = "E2E Test Report", metadata: dict | None = None) -> None:
         self.title = title
         self.start_time = time.perf_counter()
         self._scenarios: list[ScenarioResult] = []
         self._current: ScenarioResult | None = None
+        self._metadata = metadata or {}
 
     # ------------------------------------------------------------------
     # Recording API
@@ -171,6 +172,7 @@ class E2EReporter:
   <p class="meta">
     Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} &nbsp;|&nbsp;
     Total duration: {total_ms:.0f}ms
+    {self._render_metadata()}
   </p>
 
   <div class="summary">
@@ -254,6 +256,14 @@ class E2EReporter:
   <div class="kpi-grid">
     {"".join(cards)}
   </div>"""
+
+    def _render_metadata(self) -> str:
+        if not self._metadata:
+            return ""
+        parts = []
+        for key, value in self._metadata.items():
+            parts.append(f"&nbsp;|&nbsp; {key}: {html.escape(str(value))}")
+        return "".join(parts)
 
     def _render_scenarios(self) -> str:
         parts = []

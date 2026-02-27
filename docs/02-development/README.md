@@ -17,3 +17,5 @@ Architecture and engineering design documents for the Ops Analyst Agent.
 - **[Idempotency and Replay](./idempotency-and-replay.md)**: Idempotency keys, replay protection, duplicate handling, and idempotent operation patterns.
 
 - **[Performance Patterns](./performance-patterns.md)**: Parallel query execution, settings caching, connection pool management, JWKS caching, LLM timeout/retry patterns, and performance best practices.
+
+- **[Agentic Improvement Plan (Phase 0/1/2)](./agentic-improvement-plan-phase0-2.md)**: Execution plan across ops-agent, TM, Portal UI, Rule Management, and platform compose. Includes file-level touch points and measurable KPI gates so E2E reports cannot go false-green.

@@ -56,10 +56,23 @@ class InvestigationService:
 
         existing = await self._investigation_repo.get_active_for_transaction(transaction_id)
         if existing:
-            raise ConflictError(
-                f"Investigation already in progress for transaction {transaction_id}",
-                details={"existing_investigation_id": existing["id"]},
+            existing_id = str(existing.get("id") or "")
+            existing_state = (
+                await self._state_store.load_state(existing_id) if existing_id else None
             )
+            if existing_id and existing_state is None:
+                logger.warning(
+                    "Found stale in-progress investigation without state; marking failed",
+                    transaction_id=transaction_id,
+                    stale_investigation_id=existing_id,
+                )
+                await self._investigation_repo.update_status(existing_id, "FAILED")
+                await self._session.commit()
+            else:
+                raise ConflictError(
+                    f"Investigation already in progress for transaction {transaction_id}",
+                    details={"existing_investigation_id": existing["id"]},
+                )
 
         await self._investigation_repo.create(
             investigation_id=investigation_id,
@@ -580,6 +593,9 @@ class InvestigationService:
         """Backfill stable API fields used by E2E and downstream report tooling."""
         response = dict(payload)
         response["model_mode"] = str(response.get("model_mode") or "agentic")
+        raw_hypotheses = response.get("hypotheses")
+        response["hypothesis_details"] = self._normalize_hypothesis_details(raw_hypotheses)
+        response["hypotheses"] = self._normalize_hypotheses(raw_hypotheses)
 
         insight = response.get("insight")
         insight_dict = insight if isinstance(insight, dict) else {}
@@ -595,6 +611,77 @@ class InvestigationService:
 
         response["insight"] = {"severity": severity, "summary": summary}
         return response
+
+    @staticmethod
+    def _normalize_hypotheses(raw: Any) -> list[str]:
+        """Normalize mixed hypothesis payloads to API schema list[str]."""
+        if not isinstance(raw, list):
+            return []
+
+        normalized: list[str] = []
+        for item in raw:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    normalized.append(text)
+                continue
+
+            if isinstance(item, dict):
+                text = str(item.get("hypothesis") or item.get("text") or "").strip()
+                if text:
+                    normalized.append(text)
+        return normalized
+
+    @staticmethod
+    def _normalize_hypothesis_details(raw: Any) -> list[dict[str, Any]]:
+        """Normalize mixed hypotheses into structured details for agentic consumers."""
+        if not isinstance(raw, list):
+            return []
+
+        details: list[dict[str, Any]] = []
+        for item in raw:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    details.append(
+                        {
+                            "hypothesis": text,
+                            "supporting_evidence": [],
+                            "contradicting_evidence": [],
+                        }
+                    )
+                continue
+
+            if not isinstance(item, dict):
+                continue
+
+            text = str(item.get("hypothesis") or item.get("text") or "").strip()
+            if not text:
+                continue
+
+            detail: dict[str, Any] = {
+                "hypothesis": text,
+                "supporting_evidence": [],
+                "contradicting_evidence": [],
+            }
+
+            confidence = item.get("confidence")
+            if confidence is not None:
+                try:
+                    detail["confidence"] = max(0.0, min(1.0, float(confidence)))
+                except TypeError, ValueError:
+                    pass
+
+            for key in ("supporting_evidence", "contradicting_evidence"):
+                values = item.get(key)
+                if isinstance(values, list):
+                    detail[key] = [
+                        str(value).strip()[:200] for value in values if str(value).strip()
+                    ][:10]
+
+            details.append(detail)
+
+        return details
 
     async def close(self) -> None:
         """Close resources."""

@@ -336,6 +336,12 @@ async def executor_node(
     with tracer.start_as_current_span(f"agent.tool.{tool_name}") as span:
         span.set_attribute("investigation_id", state["investigation_id"])
         span.set_attribute("tool_name", tool_name)
+        if state.get("transaction_id"):
+            span.set_attribute("transaction_id", state["transaction_id"])
+        model_mode = state.get("model_mode", "unknown")
+        span.set_attribute("model_mode", model_mode)
+        if state.get("scenario_name"):
+            span.set_attribute("scenario_name", state["scenario_name"])
 
         if not registry.has(tool_name):
             logger.error(

@@ -50,7 +50,7 @@ class InvestigationState(TypedDict):
 
     pattern_results: dict[str, Any]
     similarity_results: dict[str, Any]
-    hypotheses: list[str]
+    hypotheses: list[dict[str, Any] | str]
     evidence: list[dict[str, Any]]
 
     reasoning: dict[str, Any]
@@ -73,9 +73,9 @@ class InvestigationState(TypedDict):
     tool_executions: list[ToolExecution]
     error: str | None
 
-    # Runtime feature flags snapshot (TDD-002 §2)
+    # Runtime feature flags snapshot (TDD-002 sec. 2)
     feature_flags: dict[str, bool]
-    # Runtime safeguards snapshot (TDD-002 §2)
+    # Runtime safeguards snapshot (TDD-002 sec. 2)
     safeguards: dict[str, int]
 
 

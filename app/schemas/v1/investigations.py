@@ -69,6 +69,13 @@ class InsightSummarySchema(BaseModel):
     summary: str = ""
 
 
+class HypothesisDetailSchema(BaseModel):
+    hypothesis: str
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    supporting_evidence: list[str] = Field(default_factory=list)
+    contradicting_evidence: list[str] = Field(default_factory=list)
+
+
 class InvestigationResponse(BaseModel):
     investigation_id: str
     transaction_id: str
@@ -94,6 +101,7 @@ class InvestigationDetailResponse(InvestigationResponse):
     similarity_results: dict[str, Any] = Field(default_factory=dict)
     reasoning: dict[str, Any] = Field(default_factory=dict)
     hypotheses: list[str] = Field(default_factory=list)
+    hypothesis_details: list[HypothesisDetailSchema] = Field(default_factory=list)
     rule_draft: dict[str, Any] | None = None
 
 
