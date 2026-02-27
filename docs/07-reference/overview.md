@@ -1,18 +1,10 @@
-# ADR Overview
+# Reference Overview
 
-## Foundational ADRs
+## Core References
 
-| ADR | Title | Status |
-|---|---|---|
-| 0000 | Use ADR for Architecture Decisions | Accepted |
-| 0001 | Transaction Management as Source of Truth | Accepted |
-| 0002 | Human Final Approval Boundary | Accepted |
-| 0003 | Shared `fraud_gov` Schema with Agent-Owned Tables | Accepted |
-| 0005 | Redaction and Pseudonym Correlation Policy | Accepted |
-| 0006 | Rule Draft Package + Maker-Checker Handoff | Accepted |
-| 0008 | Rollout Gates and SLO Policy | Accepted |
-
-## Agentic Architecture Set
-
-- ADR index: `agentic/README.md`
-- ADRs: `agentic/adr_001_agentic_fraud_analyst_architecture.md` to `agentic/adr_009_transaction_management_integration_specification.md`
+- Foundational decisions: `foundational-decisions.md`
+- Agentic architecture decision: `adr_001_agentic_fraud_analyst_architecture.md`
+- Agentic runtime specification: `agentic-runtime-spec.md`
+- TM integration boundary: `adr_009_transaction_management_integration_specification.md`
+- Fraud analyst workflow: `fraud-analyst-workflow.md`
+- Authentication model: `auth-model.md`

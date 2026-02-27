@@ -6,6 +6,8 @@ This module contains ZERO database access. Pure functions operating on in-memory
 from dataclasses import dataclass
 from typing import Any
 
+from app.utils.data_access import as_dict, get_attr
+
 
 @dataclass(frozen=True)
 class RecommendationCandidate:
@@ -19,13 +21,9 @@ class RecommendationCandidate:
 
 
 def _pattern_value(pattern: Any, name: str, default: float = 0.0) -> float:
-    if isinstance(pattern, dict):
-        if pattern.get("pattern_name") == name:
-            return float(pattern.get("score", default))
+    if get_attr(pattern, "pattern_name") != name:
         return default
-    if getattr(pattern, "pattern_name", None) == name:
-        return float(getattr(pattern, "score", default))
-    return default
+    return float(get_attr(pattern, "score", default))
 
 
 def _pattern_scores(pattern_scores: list[Any], name: str) -> float:
@@ -38,23 +36,17 @@ def _pattern_scores(pattern_scores: list[Any], name: str) -> float:
 
 def _pattern_details(pattern_scores: list[Any], name: str) -> dict[str, Any]:
     for pattern in pattern_scores:
-        if isinstance(pattern, dict):
-            if pattern.get("pattern_name") == name:
-                details = pattern.get("details")
-                return details if isinstance(details, dict) else {}
+        if get_attr(pattern, "pattern_name") != name:
             continue
-        if getattr(pattern, "pattern_name", None) == name:
-            details = getattr(pattern, "details", {})
-            return details if isinstance(details, dict) else {}
+        details = get_attr(pattern, "details", {})
+        return details if isinstance(details, dict) else {}
     return {}
 
 
 def _similarity_overall(similarity_result: Any) -> float:
     if similarity_result is None:
         return 0.0
-    if isinstance(similarity_result, dict):
-        return float(similarity_result.get("overall_score", 0.0))
-    return float(getattr(similarity_result, "overall_score", 0.0))
+    return float(get_attr(similarity_result, "overall_score", 0.0))
 
 
 def generate_recommendations(
@@ -74,14 +66,10 @@ def generate_recommendations(
     transaction = context.get("transaction")
     velocity = context.get("velocity_snapshot") or {}
 
-    amount = getattr(transaction, "amount", 0) if transaction else 0
-    if amount == 0 and isinstance(transaction, dict):
-        amount = transaction.get("amount", 0)
-    merchant_id = getattr(transaction, "merchant_id", "unknown") if transaction else "unknown"
-    if merchant_id == "unknown" and isinstance(transaction, dict):
-        merchant_id = transaction.get("merchant_id", "unknown")
+    amount = get_attr(transaction, "amount", 0) if transaction else 0
+    merchant_id = get_attr(transaction, "merchant_id", "unknown") if transaction else "unknown"
 
-    v24h = velocity.get("velocity_24h", "unknown") if isinstance(velocity, dict) else "unknown"
+    v24h = as_dict(velocity).get("velocity_24h", "unknown")
     amount_details = _pattern_details(pattern_scores, "amount_anomaly")
     time_details = _pattern_details(pattern_scores, "time_anomaly")
     cross_details = _pattern_details(pattern_scores, "cross_merchant")

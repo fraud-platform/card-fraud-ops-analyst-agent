@@ -1,5 +1,7 @@
 """Unit tests for reasoning tool."""
 
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -82,6 +84,42 @@ class TestReasoningTool:
         assert reasoning["risk_level"] in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
         assert str(reasoning["summary"]).startswith("Evidence fallback")
         assert float(reasoning["confidence"]) > 0.0
+        assert "error_detail" in reasoning
+
+    @pytest.mark.asyncio
+    async def test_execute_handles_llm_stage_timeout_with_evidence_fallback(
+        self, state_with_analysis
+    ):
+        """Slow LLM responses should degrade gracefully without failing the tool execution."""
+        mock_llm = AsyncMock()
+
+        async def _slow_response(*args, **kwargs):
+            await asyncio.sleep(0.05)
+            return type(
+                "AIMessage",
+                (),
+                {
+                    "content": '{"narrative":"slow","risk_level":"LOW","key_findings":[],"hypotheses":[],"confidence":0.4}',
+                    "usage_metadata": {"input_tokens": 10, "output_tokens": 10},
+                },
+            )()
+
+        mock_llm.ainvoke.side_effect = _slow_response
+        settings = SimpleNamespace(
+            llm=SimpleNamespace(
+                prompt_guard_enabled=False,
+                max_completion_tokens=384,
+                stage_timeout_seconds=0.01,
+            )
+        )
+        tool = ReasoningTool(llm=mock_llm, settings=settings)
+
+        result = await tool.execute(state_with_analysis)
+
+        reasoning = result["reasoning"]
+        assert reasoning["llm_status"] == "timeout"
+        assert reasoning["risk_level"] in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+        assert str(reasoning["summary"]).startswith("Evidence fallback")
         assert "error_detail" in reasoning
 
     @pytest.mark.asyncio
@@ -412,8 +450,8 @@ class TestReasoningTool:
                 "patterns_detected": ["velocity", "decline_anomaly", "card_testing"],
             },
             "similarity_results": {
-                "matches": [{"transaction_id": "hist-1", "score": 0.35}],
-                "overall_score": 0.35,
+                "matches": [],
+                "overall_score": 0.1,
             },
         }
 

@@ -24,6 +24,47 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+_BOOLEAN_TRUE_VALUES_SQL = "('true', 't', '1', 'yes', 'y')"
+_NORMALIZED_TRANSACTION_CONTEXT_COLUMNS_SQL = f"""
+                CASE
+                    WHEN lower(coalesce(t.transaction_context->>'3ds_verified', '')) IN {_BOOLEAN_TRUE_VALUES_SQL}
+                        THEN TRUE
+                    ELSE FALSE
+                END AS three_ds_authenticated,
+                CASE
+                    WHEN lower(coalesce(t.transaction_context->>'trusted_device', '')) IN {_BOOLEAN_TRUE_VALUES_SQL}
+                        THEN TRUE
+                    ELSE FALSE
+                END AS is_trusted_device,
+                CASE
+                    WHEN lower(coalesce(t.transaction_context->>'avs_match', '')) IN {_BOOLEAN_TRUE_VALUES_SQL}
+                        THEN TRUE
+                    ELSE FALSE
+                END AS avs_match,
+                CASE
+                    WHEN lower(coalesce(t.transaction_context->>'cvv_match', '')) IN {_BOOLEAN_TRUE_VALUES_SQL}
+                        THEN TRUE
+                    ELSE FALSE
+                END AS cvv_match,
+                CASE
+                    WHEN lower(coalesce(t.transaction_context->>'tokenized', '')) IN {_BOOLEAN_TRUE_VALUES_SQL}
+                        THEN TRUE
+                    WHEN lower(coalesce(t.transaction_context->>'payment_token_present', '')) IN {_BOOLEAN_TRUE_VALUES_SQL}
+                        THEN TRUE
+                    ELSE FALSE
+                END AS is_tokenized,
+                CASE
+                    WHEN lower(coalesce(t.transaction_context->>'cardholder_present', '')) IN {_BOOLEAN_TRUE_VALUES_SQL}
+                        THEN TRUE
+                    ELSE FALSE
+                END AS cardholder_present,
+                CASE
+                    WHEN lower(coalesce(t.transaction_context->>'known_merchant', '')) IN {_BOOLEAN_TRUE_VALUES_SQL}
+                        THEN TRUE
+                    ELSE FALSE
+                END AS is_known_merchant,
+"""
+
 
 class SimilarityTool(BaseTool):
     """Find similar historical fraud investigations using vector similarity search."""
@@ -194,7 +235,7 @@ class SimilarityTool(BaseTool):
         # Use CAST(:param AS vector) instead of :param::vector — the PostgreSQL
         # :: cast operator after a named parameter confuses SQLAlchemy's parameter parser,
         # causing the parameter to not be substituted and producing a syntax error.
-        query = text("""
+        query = text(f"""
             SELECT
                 t.transaction_id::text AS transaction_id,
                 1 - (e.embedding <=> CAST(:embedding AS vector)) AS similarity_score,
@@ -202,43 +243,7 @@ class SimilarityTool(BaseTool):
                 t.card_id,
                 t.merchant_id,
                 t.decision,
-                CASE
-                    WHEN lower(coalesce(t.transaction_context->>'3ds_verified', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    ELSE FALSE
-                END AS three_ds_authenticated,
-                CASE
-                    WHEN lower(coalesce(t.transaction_context->>'trusted_device', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    ELSE FALSE
-                END AS is_trusted_device,
-                CASE
-                    WHEN lower(coalesce(t.transaction_context->>'avs_match', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    ELSE FALSE
-                END AS avs_match,
-                CASE
-                    WHEN lower(coalesce(t.transaction_context->>'cvv_match', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    ELSE FALSE
-                END AS cvv_match,
-                CASE
-                    WHEN lower(coalesce(t.transaction_context->>'tokenized', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    WHEN lower(coalesce(t.transaction_context->>'payment_token_present', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    ELSE FALSE
-                END AS is_tokenized,
-                CASE
-                    WHEN lower(coalesce(t.transaction_context->>'cardholder_present', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    ELSE FALSE
-                END AS cardholder_present,
-                CASE
-                    WHEN lower(coalesce(t.transaction_context->>'known_merchant', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    ELSE FALSE
-                END AS is_known_merchant,
+                {_NORMALIZED_TRANSACTION_CONTEXT_COLUMNS_SQL}
                 e.metadata
             FROM fraud_gov.ops_agent_transaction_embeddings e
             JOIN fraud_gov.transactions t ON t.id = e.transaction_id
@@ -290,50 +295,14 @@ class SimilarityTool(BaseTool):
         amount_max = amount * 1.25 if amount > 0 else None
         effective_limit = max(int(limit or 20), 20) * 5
 
-        query = text("""
+        query = text(f"""
             SELECT
                 t.transaction_id::text AS transaction_id,
                 t.transaction_amount AS amount,
                 t.card_id,
                 t.merchant_id,
                 t.decision,
-                CASE
-                    WHEN lower(coalesce(t.transaction_context->>'3ds_verified', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    ELSE FALSE
-                END AS three_ds_authenticated,
-                CASE
-                    WHEN lower(coalesce(t.transaction_context->>'trusted_device', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    ELSE FALSE
-                END AS is_trusted_device,
-                CASE
-                    WHEN lower(coalesce(t.transaction_context->>'avs_match', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    ELSE FALSE
-                END AS avs_match,
-                CASE
-                    WHEN lower(coalesce(t.transaction_context->>'cvv_match', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    ELSE FALSE
-                END AS cvv_match,
-                CASE
-                    WHEN lower(coalesce(t.transaction_context->>'tokenized', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    WHEN lower(coalesce(t.transaction_context->>'payment_token_present', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    ELSE FALSE
-                END AS is_tokenized,
-                CASE
-                    WHEN lower(coalesce(t.transaction_context->>'cardholder_present', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    ELSE FALSE
-                END AS cardholder_present,
-                CASE
-                    WHEN lower(coalesce(t.transaction_context->>'known_merchant', '')) IN ('true', 't', '1', 'yes', 'y')
-                        THEN TRUE
-                    ELSE FALSE
-                END AS is_known_merchant,
+                {_NORMALIZED_TRANSACTION_CONTEXT_COLUMNS_SQL}
                 t.transaction_context AS metadata
             FROM fraud_gov.transactions t
             WHERE (

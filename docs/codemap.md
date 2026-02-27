@@ -70,4 +70,4 @@ Current implementation map for the LangGraph-based agentic fraud ops analyst ser
 - `docs/02-development/architecture.md` - architecture details
 - `docs/03-api/ops-agent-api-contract-v1.md` - API contract
 - `docs/06-operations/runbooks.md` - runtime operations
-- `docs/07-reference/agentic/` - long-lived agentic ADR references
+- `docs/07-reference/` - long-lived architecture and governance references

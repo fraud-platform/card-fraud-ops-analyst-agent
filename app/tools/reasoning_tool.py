@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -23,6 +24,8 @@ from app.tools._core.reasoning_logic import (
     validate_prompt_payload,
 )
 from app.tools.base import BaseTool
+from app.utils.constants import SEVERITY_RANK, VALID_SEVERITIES
+from app.utils.data_access import get_attr
 from app.utils.redaction import redact_state_for_llm
 
 if TYPE_CHECKING:
@@ -159,10 +162,34 @@ class ReasoningTool(BaseTool):
 
             start_time = time.perf_counter()
             try:
-                response = await self._llm.ainvoke(
-                    messages,
-                    max_tokens=max(settings.llm.max_completion_tokens, REASONING_MIN_MAX_TOKENS),
+                async with asyncio.timeout(settings.llm.stage_timeout_seconds):
+                    response = await self._llm.ainvoke(
+                        messages,
+                        max_tokens=max(
+                            settings.llm.max_completion_tokens, REASONING_MIN_MAX_TOKENS
+                        ),
+                    )
+            except TimeoutError:
+                elapsed = time.perf_counter() - start_time
+                ops_agent_llm_latency_seconds.labels(purpose="reasoning").observe(elapsed)
+                ops_agent_llm_calls_total.labels(purpose="reasoning", status="timeout").inc()
+                span.set_attribute(
+                    "error", f"reasoning_llm_timeout_{settings.llm.stage_timeout_seconds}s"
                 )
+                logger.warning(
+                    "Reasoning tool LLM call timed out",
+                    investigation_id=state["investigation_id"],
+                    timeout_seconds=settings.llm.stage_timeout_seconds,
+                )
+                reasoning = self._reasoning_unavailable(
+                    state,
+                    status="timeout",
+                    error_detail=(
+                        f"TimeoutError: LLM reasoning call exceeded "
+                        f"{settings.llm.stage_timeout_seconds}s"
+                    ),
+                )
+                return self._apply_unavailable_reasoning(state, reasoning)
             except Exception as exc:
                 elapsed = time.perf_counter() - start_time
                 ops_agent_llm_latency_seconds.labels(purpose="reasoning").observe(elapsed)
@@ -237,7 +264,7 @@ class ReasoningTool(BaseTool):
 
             hypotheses = reasoning.get("hypotheses", [])
             severity = reasoning.get("risk_level", state["severity"])
-            if severity not in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}:
+            if severity not in VALID_SEVERITIES:
                 severity = state["severity"]
             calibrated_severity = self._calibrate_llm_severity(state, severity)
             if calibrated_severity != severity:
@@ -297,14 +324,13 @@ class ReasoningTool(BaseTool):
     def _normalize_severity(value: object, *, default: str) -> str:
         if isinstance(value, str):
             normalized = value.strip().upper()
-            if normalized in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}:
+            if normalized in VALID_SEVERITIES:
                 return normalized
         return default
 
     @staticmethod
     def _max_severity(left: str, right: str) -> str:
-        rank = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
-        return left if rank.get(left, 0) >= rank.get(right, 0) else right
+        return left if SEVERITY_RANK.get(left, 0) >= SEVERITY_RANK.get(right, 0) else right
 
     @staticmethod
     def _pattern_rows(state: InvestigationState) -> list[dict[str, Any]]:
@@ -326,12 +352,6 @@ class ReasoningTool(BaseTool):
             return value.strip().lower() in {"true", "t", "1", "yes", "y"}
         return False
 
-    @staticmethod
-    def _value_from_mapping_or_obj(payload: Any, key: str) -> Any:
-        if isinstance(payload, dict):
-            return payload.get(key)
-        return getattr(payload, key, None)
-
     @classmethod
     def _counter_evidence_count(cls, state: InvestigationState) -> int:
         context = state.get("context", {}) if isinstance(state, dict) else {}
@@ -343,38 +363,38 @@ class ReasoningTool(BaseTool):
         features = {
             "three_ds": (
                 tx_context_dict.get("3ds_verified"),
-                cls._value_from_mapping_or_obj(transaction, "three_ds_authenticated"),
+                get_attr(transaction, "three_ds_authenticated"),
             ),
             "trusted_device": (
                 tx_context_dict.get("trusted_device"),
-                cls._value_from_mapping_or_obj(transaction, "device_trusted"),
-                cls._value_from_mapping_or_obj(transaction, "is_trusted_device"),
+                get_attr(transaction, "device_trusted"),
+                get_attr(transaction, "is_trusted_device"),
             ),
             "cardholder_present": (
                 tx_context_dict.get("cardholder_present"),
-                cls._value_from_mapping_or_obj(transaction, "cardholder_present"),
+                get_attr(transaction, "cardholder_present"),
             ),
             "recurring_customer": (
                 tx_context_dict.get("is_recurring_customer"),
-                cls._value_from_mapping_or_obj(transaction, "is_recurring_customer"),
+                get_attr(transaction, "is_recurring_customer"),
             ),
             "known_merchant": (
                 tx_context_dict.get("known_merchant"),
-                cls._value_from_mapping_or_obj(transaction, "is_known_merchant"),
+                get_attr(transaction, "is_known_merchant"),
             ),
             "avs_match": (
                 tx_context_dict.get("avs_match"),
-                cls._value_from_mapping_or_obj(transaction, "avs_match"),
+                get_attr(transaction, "avs_match"),
             ),
             "cvv_match": (
                 tx_context_dict.get("cvv_match"),
-                cls._value_from_mapping_or_obj(transaction, "cvv_match"),
+                get_attr(transaction, "cvv_match"),
             ),
             "tokenized": (
                 tx_context_dict.get("tokenized"),
                 tx_context_dict.get("payment_token_present"),
-                cls._value_from_mapping_or_obj(transaction, "is_tokenized"),
-                cls._value_from_mapping_or_obj(transaction, "payment_token_present"),
+                get_attr(transaction, "is_tokenized"),
+                get_attr(transaction, "payment_token_present"),
             ),
         }
 
@@ -414,7 +434,7 @@ class ReasoningTool(BaseTool):
         if not isinstance(matches, list):
             return False
         for match in matches:
-            counter = cls._value_from_mapping_or_obj(match, "counter_evidence")
+            counter = get_attr(match, "counter_evidence")
             if isinstance(counter, (list, dict)) and bool(counter):
                 return True
         return False
@@ -424,9 +444,7 @@ class ReasoningTool(BaseTool):
         context = state.get("context", {}) if isinstance(state, dict) else {}
         context_dict = context if isinstance(context, dict) else {}
         transaction = context_dict.get("transaction", {})
-        decision = cls._value_from_mapping_or_obj(
-            transaction, "decision"
-        ) or cls._value_from_mapping_or_obj(transaction, "status")
+        decision = get_attr(transaction, "decision") or get_attr(transaction, "status")
         if isinstance(decision, str):
             return decision.strip().upper()
         return ""
@@ -479,11 +497,7 @@ class ReasoningTool(BaseTool):
             score_by_name.get("velocity", 0.0) >= 0.65
             or score_by_name.get("card_testing", 0.0) >= 0.65
         )
-        if (
-            normalized == "LOW"
-            and has_high_risk_pattern_combo
-            and (similarity_score >= 0.3 or rule_match_count >= 1)
-        ):
+        if normalized == "LOW" and has_high_risk_pattern_combo:
             return "MEDIUM"
 
         # Keep a minimum severity when transaction was declined and one strong fraud pattern exists.

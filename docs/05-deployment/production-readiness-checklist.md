@@ -74,9 +74,9 @@
 - [x] Human final authority controls verified.
 - [x] Rule draft handoff governance approved.
 - [x] ADRs (Architecture Decision Records) documented for key decisions:
-  - [x] [ADR 0001: TM as Source of Truth](../07-reference/0001-tm-as-source-of-truth.md)
-  - [x] [ADR 0002: Human Approval Finality](../07-reference/0002-human-approval-finality.md)
-  - [x] [ADR 001: Agentic Fraud Analyst Architecture](../07-reference/agentic/adr_001_agentic_fraud_analyst_architecture.md)
-  - [x] [ADR 003: Agent Planner and Prompt Engineering](../07-reference/agentic/adr_003_agent_planner_and_prompt_engineering.md)
-  - [x] [ADR 0008: Rollout Gating and SLO Policy](../07-reference/0008-rollout-gating-and-slo-policy.md)
-  - [x] [ADR 006: LangGraph Production Runtime Specification](../07-reference/agentic/adr_006_lang_graph_production_runtime_specification.md)
+  - [x] [Source of Truth](../07-reference/foundational-decisions.md#1-source-of-truth)
+  - [x] [Human Decision Boundary](../07-reference/foundational-decisions.md#2-human-decision-boundary)
+  - [x] [ADR 001: Agentic Fraud Analyst Architecture](../07-reference/adr_001_agentic_fraud_analyst_architecture.md)
+  - [x] [Agentic Runtime Specification](../07-reference/agentic-runtime-spec.md)
+  - [x] [Rollout and SLO Gating](../07-reference/foundational-decisions.md#6-rollout-and-slo-gating)
+  - [x] [ADR 009: TM Integration Boundary](../07-reference/adr_009_transaction_management_integration_specification.md)

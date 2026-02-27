@@ -66,18 +66,12 @@ Documentation-first repository for enterprise-grade ops analyst agent implementa
 ### `07-reference` - Reference
 
 - `07-reference/overview.md`
+- `07-reference/foundational-decisions.md`
 - `07-reference/fraud-analyst-workflow.md`
 - `07-reference/auth-model.md`
-- `07-reference/0000-use-adr.md`
-- `07-reference/0001-tm-as-source-of-truth.md`
-- `07-reference/0002-human-approval-finality.md`
-- `07-reference/0003-fraud-gov-shared-schema-agent-tables.md`
-- `07-reference/0005-redaction-and-pseudonym-policy.md`
-- `07-reference/0006-rule-draft-package-and-maker-checker-handoff.md`
-- `07-reference/0008-rollout-gating-and-slo-policy.md`
-- `07-reference/agentic/README.md`
-- `07-reference/agentic/adr_001_agentic_fraud_analyst_architecture.md`
-- `07-reference/agentic/adr_009_transaction_management_integration_specification.md`
+- `07-reference/adr_001_agentic_fraud_analyst_architecture.md`
+- `07-reference/agentic-runtime-spec.md`
+- `07-reference/adr_009_transaction_management_integration_specification.md`
 
 ### Archive Policy
 

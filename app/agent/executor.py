@@ -16,6 +16,7 @@ from app.core.metrics import (
     ops_agent_tool_execution_total,
 )
 from app.utils.clock import utc_now
+from app.utils.data_access import as_dict, as_list, get_attr
 from app.utils.redaction import redact_card_id
 
 if TYPE_CHECKING:
@@ -25,23 +26,9 @@ logger = structlog.get_logger(__name__)
 tracer = trace.get_tracer(__name__)
 
 
-def _as_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _value_from_mapping_or_obj(value: Any, key: str) -> Any:
-    if isinstance(value, dict):
-        return value.get(key)
-    return getattr(value, key, None)
-
-
 def _signal_names(context: dict[str, Any]) -> list[str]:
     names: list[str] = []
-    for signal in _as_list(context.get("signals")):
+    for signal in as_list(context.get("signals")):
         if isinstance(signal, dict):
             name = signal.get("name")
         else:
@@ -53,7 +40,7 @@ def _signal_names(context: dict[str, Any]) -> list[str]:
 
 def _window_counts(context: dict[str, Any]) -> dict[str, int]:
     counts: dict[str, int] = {}
-    windows = _as_dict(context.get("windows"))
+    windows = as_dict(context.get("windows"))
     for key, window in windows.items():
         count = 0
         if isinstance(window, dict):
@@ -69,32 +56,29 @@ def _window_counts(context: dict[str, Any]) -> dict[str, int]:
 
 
 def _summarize_context(context_raw: Any) -> dict[str, Any]:
-    context = _as_dict(context_raw)
+    context = as_dict(context_raw)
     transaction = context.get("transaction")
-    card_id = _value_from_mapping_or_obj(transaction, "card_id")
+    card_id = get_attr(transaction, "card_id")
     redacted_card_id = redact_card_id(card_id) if isinstance(card_id, str) else None
     return {
-        "transaction_id": _value_from_mapping_or_obj(transaction, "transaction_id"),
-        "amount": _value_from_mapping_or_obj(transaction, "amount"),
-        "currency": _value_from_mapping_or_obj(transaction, "currency"),
-        "decision": (
-            _value_from_mapping_or_obj(transaction, "decision")
-            or _value_from_mapping_or_obj(transaction, "status")
-        ),
+        "transaction_id": get_attr(transaction, "transaction_id"),
+        "amount": get_attr(transaction, "amount"),
+        "currency": get_attr(transaction, "currency"),
+        "decision": (get_attr(transaction, "decision") or get_attr(transaction, "status")),
         "card_id": redacted_card_id,
-        "merchant_id": _value_from_mapping_or_obj(transaction, "merchant_id"),
+        "merchant_id": get_attr(transaction, "merchant_id"),
         "window_counts": _window_counts(context),
         "signal_names": _signal_names(context),
-        "rule_match_count": len(_as_list(context.get("rule_matches"))),
-        "card_history_count": len(_as_list(context.get("card_history"))),
+        "rule_match_count": len(as_list(context.get("rule_matches"))),
+        "card_history_count": len(as_list(context.get("card_history"))),
     }
 
 
 def _summarize_pattern_results(pattern_results_raw: Any) -> dict[str, Any]:
-    pattern_results = _as_dict(pattern_results_raw)
+    pattern_results = as_dict(pattern_results_raw)
     scores = [
         item
-        for item in _as_list(pattern_results.get("scores"))
+        for item in as_list(pattern_results.get("scores"))
         if isinstance(item, dict) and isinstance(item.get("pattern_name"), str)
     ]
 
@@ -108,7 +92,7 @@ def _summarize_pattern_results(pattern_results_raw: Any) -> dict[str, Any]:
     return {
         "overall_score": float(pattern_results.get("overall_score", 0.0) or 0.0),
         "patterns_detected": [
-            str(item) for item in _as_list(pattern_results.get("patterns_detected"))
+            str(item) for item in as_list(pattern_results.get("patterns_detected"))
         ],
         "top_scores": [
             {
@@ -121,9 +105,9 @@ def _summarize_pattern_results(pattern_results_raw: Any) -> dict[str, Any]:
 
 
 def _summarize_similarity_results(similarity_results_raw: Any) -> dict[str, Any]:
-    similarity_results = _as_dict(similarity_results_raw)
+    similarity_results = as_dict(similarity_results_raw)
     matches = [
-        item for item in _as_list(similarity_results.get("matches")) if isinstance(item, dict)
+        item for item in as_list(similarity_results.get("matches")) if isinstance(item, dict)
     ]
     summary: dict[str, Any] = {
         "overall_score": float(similarity_results.get("overall_score", 0.0) or 0.0),
@@ -134,7 +118,7 @@ def _summarize_similarity_results(similarity_results_raw: Any) -> dict[str, Any]
     if "skipped" in similarity_results:
         summary["skipped"] = bool(similarity_results.get("skipped"))
 
-    vector_diagnostics = _as_dict(similarity_results.get("vector_diagnostics"))
+    vector_diagnostics = as_dict(similarity_results.get("vector_diagnostics"))
     if vector_diagnostics:
         candidate_count_raw = vector_diagnostics.get("candidate_count", 0)
         search_limit_raw = vector_diagnostics.get("search_limit", 0)
@@ -169,8 +153,8 @@ def _summarize_similarity_results(similarity_results_raw: Any) -> dict[str, Any]
 
 
 def _summarize_reasoning(reasoning_raw: Any) -> dict[str, Any]:
-    reasoning = _as_dict(reasoning_raw)
-    findings = _as_list(reasoning.get("key_findings"))
+    reasoning = as_dict(reasoning_raw)
+    findings = as_list(reasoning.get("key_findings"))
     return {
         "llm_status": reasoning.get("llm_status"),
         "risk_level": reasoning.get("risk_level"),
@@ -182,7 +166,7 @@ def _summarize_reasoning(reasoning_raw: Any) -> dict[str, Any]:
 
 
 def _summarize_recommendations(recommendations_raw: Any) -> dict[str, Any]:
-    recommendations = [item for item in _as_list(recommendations_raw) if isinstance(item, dict)]
+    recommendations = [item for item in as_list(recommendations_raw) if isinstance(item, dict)]
     rec_types = [
         str(item.get("type") or item.get("recommendation_type") or "") for item in recommendations
     ]
@@ -193,11 +177,11 @@ def _summarize_recommendations(recommendations_raw: Any) -> dict[str, Any]:
 
 
 def _summarize_rule_draft(rule_draft_raw: Any) -> dict[str, Any]:
-    rule_draft = _as_dict(rule_draft_raw)
+    rule_draft = as_dict(rule_draft_raw)
     return {
         "has_rule_draft": bool(rule_draft),
         "rule_name": rule_draft.get("rule_name"),
-        "condition_count": len(_as_list(rule_draft.get("conditions"))),
+        "condition_count": len(as_list(rule_draft.get("conditions"))),
     }
 
 

@@ -9,6 +9,8 @@ from app.tools._core.pattern_logic import PatternScore
 from app.tools._core.recommendation_logic import generate_recommendations
 from app.tools._core.similarity_logic import SimilarityMatch, SimilarityResult
 from app.tools.base import BaseTool
+from app.utils.constants import SEVERITY_RANK, VALID_SEVERITIES
+from app.utils.data_access import as_dict, get_attr
 
 if TYPE_CHECKING:
     from app.agent.state import InvestigationState
@@ -28,29 +30,23 @@ class RecommendationTool(BaseTool):
         )
 
     async def execute(self, state: InvestigationState) -> InvestigationState:
-        context = state["context"]
-        pattern_results = state["pattern_results"]
-        similarity_results = state["similarity_results"]
-        reasoning = state.get("reasoning") or {}
+        context = as_dict(state["context"])
+        pattern_results = as_dict(state["pattern_results"])
+        similarity_results = as_dict(state["similarity_results"])
+        reasoning = as_dict(state.get("reasoning"))
         severity = state["severity"]
 
         # When reasoning succeeded, trust its risk_level to override severity in both
         # directions (fixes no_fraud_overescalated: pattern HIGH + LLM LOW → LOW recs).
         # When reasoning failed/unavailable, only allow an upgrade (preserve existing caution).
-        reasoning_status = reasoning.get("llm_status") if isinstance(reasoning, dict) else None
-        reasoning_risk = reasoning.get("risk_level") if isinstance(reasoning, dict) else None
-        if reasoning_status == "success" and reasoning_risk in (
-            "CRITICAL",
-            "HIGH",
-            "MEDIUM",
-            "LOW",
-        ):
+        reasoning_status = reasoning.get("llm_status")
+        reasoning_risk = reasoning.get("risk_level")
+        if reasoning_status == "success" and reasoning_risk in VALID_SEVERITIES:
             severity = reasoning_risk
         else:
-            reasoning_severity = reasoning.get("severity") if isinstance(reasoning, dict) else None
-            if reasoning_severity and reasoning_severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
-                severity_rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
-                if severity_rank.get(reasoning_severity, 0) > severity_rank.get(severity, 0):
+            reasoning_severity = reasoning.get("severity")
+            if reasoning_severity and reasoning_severity in VALID_SEVERITIES:
+                if SEVERITY_RANK.get(reasoning_severity, 0) > SEVERITY_RANK.get(severity, 0):
                     severity = reasoning_severity
 
         pattern_scores = [
@@ -63,26 +59,21 @@ class RecommendationTool(BaseTool):
             for s in pattern_results.get("scores", [])
         ]
 
-        def _item_value(item: object, key: str, default: object = None) -> object:
-            if isinstance(item, dict):
-                return item.get(key, default)
-            return getattr(item, key, default)
-
         matches = [
             SimilarityMatch(
-                match_id=str(_item_value(m, "match_id") or _item_value(m, "transaction_id", "")),
-                match_type=str(_item_value(m, "match_type", "unknown")),
+                match_id=str(get_attr(m, "match_id") or get_attr(m, "transaction_id", "")),
+                match_type=str(get_attr(m, "match_type", "unknown")),
                 similarity_score=float(
-                    _item_value(m, "similarity_score") or _item_value(m, "score", 0.0)
+                    get_attr(m, "similarity_score") or get_attr(m, "score", 0.0)
                 ),
                 details=(
-                    _item_value(m, "details", {})
-                    if isinstance(_item_value(m, "details", {}), dict)
+                    get_attr(m, "details", {})
+                    if isinstance(get_attr(m, "details", {}), dict)
                     else {}
                 ),
                 counter_evidence=(
-                    _item_value(m, "counter_evidence")
-                    if isinstance(_item_value(m, "counter_evidence"), list)
+                    get_attr(m, "counter_evidence")
+                    if isinstance(get_attr(m, "counter_evidence"), list)
                     else None
                 ),
             )
