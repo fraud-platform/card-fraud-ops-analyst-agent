@@ -1,6 +1,6 @@
 ﻿# Agentic Improvement Plan (Phase 0/1/2)
 
-Updated: 2026-02-27
+Updated: 2026-02-28
 
 This document is a repo-by-repo execution plan to increase agent autonomy and investigation quality while preserving human-in-loop controls.
 
@@ -18,7 +18,7 @@ Reference example: `docs/temporary-reports/e2e-scenarios-report-31matrix-2026022
 - Correct rule draft export integration so ops-agent exports into Rule Management's real API contract.
 
 
-## Current Status Snapshot (2026-02-27)
+## Current Status Snapshot (2026-02-28)
 
 Completed in codebase:
 - Timestamped report naming is implemented for matrix and pytest report flows.
@@ -30,18 +30,23 @@ Completed in codebase:
 - Reasoning contract includes structured hypotheses, known/unknown facts, and evidence citations.
 - Similarity path supports SQL heuristic fallback when embedding calls fail.
 
-Fixed in this pass:
+Validated in this pass:
 - KPI evaluation is now rendered as a dedicated scenario so report status is explicit.
 - Matrix command now exits non-zero when KPI gate fails.
 - Stage-audit output is generated after final scenario status adjustments (no stale pass/fail drift).
-- 31-matrix run is clean and KPI-gated (`kpi_all_pass=True`) in `htmlcov/e2e-31matrix-report-20260227-162414.html`.
-- 23-scenario pytest E2E suite is clean (`23 passed`) in `htmlcov/e2e-pytest-report-20260227-163202.html`.
+- 31-matrix run is clean and KPI-gated (`kpi_all_pass=True`) in `htmlcov/e2e-31matrix-report-20260228-070147.html`.
+- 23-scenario pytest E2E suite is clean (`23 passed`) in `htmlcov/e2e-pytest-report-20260228-071637.html`.
 - Jaeger trace searchability verified end-to-end via local Jaeger API (`service=ops-analyst-agent`, searchable trace tags include `investigation_id`, `transaction_id`, `scenario_name`, `case_id`, `tool_status`, `model_mode`).
 - Rule export contract validated end-to-end against Rule Management `POST /api/v1/rules` using mapped legacy ops-agent payload.
 - No-fraud over-escalation regression fixed (isolated moderate `amount_anomaly` + strong counter-evidence now calibrates to `LOW`); validated in fresh 31-matrix run `htmlcov/e2e-31matrix-report-20260228-070147.html` and pytest E2E run `htmlcov/e2e-pytest-report-20260228-071637.html`.
 
-Still pending:
-- Cross-repo portal/UI model mode cleanup in `card-fraud-intelligence-portal`.
+Still pending (current repo only):
+- Phase 2A in `card-fraud-ops-analyst-agent`: add `LinkAnalysisTool` and graph wiring (`app/tools/link_analysis_tool.py`, `app/tools/_core/link_analysis_logic.py`, service registry).
+- Phase 2B consumer work in `card-fraud-ops-analyst-agent`: extend `TMClient` calls and `link_analysis_tool` to consume TM device/IP neighborhood endpoints once TM side is finalized.
+
+Comments:
+- Phase 0 and Phase 1 items for this repo are complete and validated by both E2E paths (`31-matrix` and `pytest 23-scenario`).
+- Cross-repo items (Portal/TM/Rule Management) are intentionally handled in separate sessions and are not blockers for this repo commit.
 
 ## Non-Goals (for Phase 0-2)
 
@@ -377,10 +382,10 @@ Touch points:
 
 ## Execution Checklist (Suggested PR Sequence)
 
-1. PR1 (ops-agent): Phase 0.2/0.3/0.4 (truthful KPI gate + filenames + metadata)
-2. PR2 (ops-agent): Phase 0.1/0.5 (dependency guard + trace attributes + Jaeger searchability)
-3. PR3 (ops-agent): Phase 1.1/1.2 (context.features + reasoning contract)
-4. PR4 (portal): Phase 1.4 (types/labels align to agentic)
-5. PR5 (ops-agent + rule-mgmt): Rule export contract fix (Option A or B)
-6. PR6 (ops-agent): Phase 2A (link analysis without TM changes)
-7. PR7 (TM + ops-agent): Phase 2B (device/IP ring detection)
+1. PR1 (ops-agent): Phase 0.2/0.3/0.4 (truthful KPI gate + filenames + metadata) - DONE
+2. PR2 (ops-agent): Phase 0.1/0.5 (dependency guard + trace attributes + Jaeger searchability) - DONE
+3. PR3 (ops-agent): Phase 1.1/1.2 (context.features + reasoning contract) - DONE
+4. PR4 (portal): Phase 1.4 (types/labels align to agentic) - SEPARATE SESSION
+5. PR5 (ops-agent + rule-mgmt): Rule export contract fix (Option A or B) - DONE (ops-agent side + live validation complete)
+6. PR6 (ops-agent): Phase 2A (link analysis without TM changes) - PENDING
+7. PR7 (TM + ops-agent): Phase 2B (device/IP ring detection) - PENDING (cross-repo dependency)
