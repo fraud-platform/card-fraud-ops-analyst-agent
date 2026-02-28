@@ -444,3 +444,75 @@ async def test_export_draft_strips_trailing_slash_from_base_url():
 
     assert result.success is True
     assert called_urls[0] == "http://rm-service/api/v1/import"
+
+
+@pytest.mark.asyncio
+async def test_export_draft_maps_legacy_payload_for_rules_endpoint():
+    client = RuleManagementClient(base_url="http://rm-service/api/v1")
+
+    captured: dict = {}
+    ok_response = _fake_response(201, json_data={"rule_id": "rule-123"})
+
+    async def capture_post(url, **kwargs):
+        captured["url"] = url
+        captured["json"] = kwargs.get("json")
+        return ok_response
+
+    mock_http = AsyncMock()
+    mock_http.post = capture_post
+
+    async def fake_get_client():
+        return mock_http
+
+    async def fake_build_headers():
+        return {"Content-Type": "application/json"}
+
+    client._get_client = fake_get_client
+    client._build_headers = fake_build_headers
+
+    result = await client.export_draft(
+        "/rules",
+        {
+            "rule_name": "Legacy Draft",
+            "rule_description": "desc",
+            "conditions": [{"field_name": "amount", "operator": "GT", "value": 100}],
+        },
+    )
+
+    assert result.success is True
+    assert captured["url"] == "http://rm-service/api/v1/rules"
+    assert captured["json"]["rule_type"] == "MONITORING"
+    assert captured["json"]["action"] == "REVIEW"
+    assert captured["json"]["condition_tree"]["conditions"][0]["field"] == "amount"
+
+
+def test_map_ops_draft_to_rule_create_preserves_rule_create_shape():
+    payload = {
+        "rule_name": "High Velocity",
+        "description": "desc",
+        "rule_type": "AUTH",
+        "condition_tree": {"operator": "AND", "conditions": []},
+        "priority": 10,
+        "action": "DECLINE",
+    }
+    mapped = RuleManagementClient._map_ops_draft_to_rule_create(payload)
+    assert mapped == payload
+
+
+def test_map_ops_draft_to_rule_create_transforms_legacy_payload():
+    payload = {
+        "rule_name": "Draft Rule",
+        "rule_description": "Generated draft",
+        "conditions": [{"field_name": "decline_rate_1h", "operator": ">", "value": 0.3}],
+        "thresholds": {"decline_rate_1h_threshold": 0.3},
+        "metadata": {"source": "ops-agent"},
+    }
+    mapped = RuleManagementClient._map_ops_draft_to_rule_create(payload)
+    assert mapped["rule_name"] == "Draft Rule"
+    assert mapped["description"] == "Generated draft"
+    assert mapped["rule_type"] == "MONITORING"
+    assert mapped["condition_tree"]["operator"] == "AND"
+    assert mapped["condition_tree"]["conditions"][0]["field"] == "decline_rate_1h"
+    assert mapped["action"] == "REVIEW"
+    assert mapped["metadata"]["source"] == "ops-agent"
+    assert "thresholds" in mapped["metadata"]

@@ -28,7 +28,7 @@ def test_create_request_defaults():
 def test_export_request():
     req = ExportRequest(
         target="rule-management",
-        target_endpoint="/api/v1/ops-agent-drafts/import",
+        target_endpoint="/api/v1/rules",
     )
     assert req.target == "rule-management"
 

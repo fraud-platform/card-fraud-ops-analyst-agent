@@ -87,6 +87,8 @@ async def planner_node(
             span.set_attribute("transaction_id", state["transaction_id"])
         model_mode = state.get("model_mode", "unknown")
         span.set_attribute("model_mode", model_mode)
+        if state.get("case_id"):
+            span.set_attribute("case_id", state["case_id"])
         if state.get("scenario_name"):
             span.set_attribute("scenario_name", state["scenario_name"])
 

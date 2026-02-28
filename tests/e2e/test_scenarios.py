@@ -548,6 +548,10 @@ class ScenarioTestRunner:
         self.server_features = server_features or self._fetch_server_features()
         # Use unique case_id so each run is fresh and demo output isn't tied to stale investigations.
         self.case_id = f"e2e-{scenario.value}-{int(time.time() * 1000)}-{uuid4().hex[:8]}"
+        self.trace_headers = {
+            "X-Scenario-Name": scenario.value,
+            "X-Case-ID": self.case_id,
+        }
         self.results: dict[str, Any] = {}
         self.timings: dict[str, float] = {}
         self._reporter = reporter
@@ -917,9 +921,10 @@ class ScenarioTestRunner:
             "transaction_id": transaction_id,
             "mode": "quick",
             "case_id": self.case_id,
+            "scenario_name": self.scenario.value,
         }
         start = time.perf_counter()
-        response = self.client.post(url, json=req_body)
+        response = self.client.post(url, json=req_body, headers=self.trace_headers)
         elapsed = (time.perf_counter() - start) * 1000
         self.timings["run_investigation_ms"] = elapsed
 
@@ -984,7 +989,7 @@ class ScenarioTestRunner:
         response: httpx.Response | None = None
         start = time.perf_counter()
         for attempt in range(1, max_attempts + 1):
-            response = self.client.get(url)
+            response = self.client.get(url, headers=self.trace_headers)
             self.log("DETAIL", f"Attempt {attempt}/{max_attempts}: HTTP {response.status_code}")
             if response.status_code == 200:
                 break
@@ -1906,13 +1911,23 @@ def test_llm_agentic_mode(e2e_reporter: E2EReporter):
     )
 
     case_id = f"e2e-llm-{int(time.time() * 1000)}-{uuid4().hex[:8]}"
-    run_request = {"transaction_id": txn_id, "mode": "quick", "case_id": case_id}
+    run_request = {
+        "transaction_id": txn_id,
+        "mode": "quick",
+        "case_id": case_id,
+        "scenario_name": FraudScenario.CARD_TESTING_PATTERN.value,
+    }
+    run_headers = {
+        "X-Scenario-Name": FraudScenario.CARD_TESTING_PATTERN.value,
+        "X-Case-ID": case_id,
+    }
 
     # Run investigation (handle 409 = already investigated, fetch detail to check model_mode)
     start = time.perf_counter()
     response = client.post(
         f"{API_PREFIX}/investigations/run",
         json=run_request,
+        headers=run_headers,
     )
     elapsed = (time.perf_counter() - start) * 1000
 
@@ -1961,7 +1976,7 @@ def test_llm_agentic_mode(e2e_reporter: E2EReporter):
         detail_notes: list[str] = []
         for attempt in range(1, attempts + 1):
             start = time.perf_counter()
-            response = client.get(f"{API_PREFIX}/investigations/{run_id}")
+            response = client.get(f"{API_PREFIX}/investigations/{run_id}", headers=run_headers)
             elapsed = (time.perf_counter() - start) * 1000
             if response.status_code == 200:
                 data = response.json()
@@ -2050,13 +2065,23 @@ def test_end_to_end_acknowledge_flow(e2e_reporter: E2EReporter):
     )
 
     case_id = f"e2e-ack-{int(time.time() * 1000)}-{uuid4().hex[:8]}"
-    run_request = {"transaction_id": txn_id, "mode": "quick", "case_id": case_id}
+    run_request = {
+        "transaction_id": txn_id,
+        "mode": "quick",
+        "case_id": case_id,
+        "scenario_name": FraudScenario.CARD_TESTING_PATTERN.value,
+    }
+    run_headers = {
+        "X-Scenario-Name": FraudScenario.CARD_TESTING_PATTERN.value,
+        "X-Case-ID": case_id,
+    }
 
     # Stage 2: Run investigation (handle 409 = already investigated, get existing run_id)
     start = time.perf_counter()
     response = client.post(
         f"{API_PREFIX}/investigations/run",
         json=run_request,
+        headers=run_headers,
     )
     elapsed = (time.perf_counter() - start) * 1000
 

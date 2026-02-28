@@ -36,7 +36,7 @@ class CreateRequest(BaseModel):
 
 class ExportRequest(BaseModel):
     target: str = "rule-management"
-    target_endpoint: str = "/api/v1/ops-agent-drafts/import"
+    target_endpoint: str = "/api/v1/rules"
 
     @field_validator("target_endpoint")
     @classmethod

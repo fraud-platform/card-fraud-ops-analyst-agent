@@ -289,6 +289,7 @@ def _record_metrics(
     )
     ops_agent_tool_execution_total.labels(tool_name=tool_name, status=status).inc()
     span.set_attribute("status", status)
+    span.set_attribute("tool_status", status)
     if execution_time_ms:
         span.set_attribute("execution_time_ms", execution_time_ms)
     if error:
@@ -324,6 +325,8 @@ async def executor_node(
             span.set_attribute("transaction_id", state["transaction_id"])
         model_mode = state.get("model_mode", "unknown")
         span.set_attribute("model_mode", model_mode)
+        if state.get("case_id"):
+            span.set_attribute("case_id", state["case_id"])
         if state.get("scenario_name"):
             span.set_attribute("scenario_name", state["scenario_name"])
 

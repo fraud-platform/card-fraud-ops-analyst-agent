@@ -332,6 +332,31 @@ kubectl rollout restart deployment/ops-agent
 
 ---
 
+### Jaeger Search (Investigation-Centric)
+
+Use tags instead of only operation name when debugging investigations:
+
+1. Open `http://localhost:16686/search`
+2. Service: `card-fraud-ops-analyst-agent`
+3. Add one or more tags:
+   - `investigation_id=<uuid>`
+   - `transaction_id=<uuid>`
+   - `scenario_name=<e2e scenario>`
+   - `tool_name=context_tool|pattern_tool|similarity_tool|reasoning_tool|recommendation_tool|rule_draft_tool`
+   - `tool_status=SUCCESS|FAILED|TIMED_OUT`
+4. Search and open the trace
+
+Useful API correlation headers:
+- `X-Investigation-ID`
+- `X-Trace-ID`
+- `X-Request-ID`
+
+If the trace search is empty:
+- confirm `trace_id` is present in `GET /api/v1/ops-agent/investigations/{id}` response
+- verify OTLP endpoint and Jaeger collector health (section above)
+
+---
+
 ### Problem: Can't correlate logs across services
 
 **Diagnosis:**

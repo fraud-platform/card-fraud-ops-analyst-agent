@@ -36,10 +36,11 @@ Fixed in this pass:
 - Stage-audit output is generated after final scenario status adjustments (no stale pass/fail drift).
 - 31-matrix run is clean and KPI-gated (`kpi_all_pass=True`) in `htmlcov/e2e-31matrix-report-20260227-162414.html`.
 - 23-scenario pytest E2E suite is clean (`23 passed`) in `htmlcov/e2e-pytest-report-20260227-163202.html`.
+- Jaeger trace searchability verified end-to-end via local Jaeger API (`service=ops-analyst-agent`, searchable trace tags include `investigation_id`, `transaction_id`, `scenario_name`, `case_id`, `tool_status`, `model_mode`).
+- Rule export contract validated end-to-end against Rule Management `POST /api/v1/rules` using mapped legacy ops-agent payload.
+- No-fraud over-escalation regression fixed (isolated moderate `amount_anomaly` + strong counter-evidence now calibrates to `LOW`); validated in fresh 31-matrix run `htmlcov/e2e-31matrix-report-20260228-070147.html` and pytest E2E run `htmlcov/e2e-pytest-report-20260228-071637.html`.
 
 Still pending:
-- Full trace usability hardening in Jaeger (search by investigation id end-to-end).
-- Rule export contract alignment with Rule Management API.
 - Cross-repo portal/UI model mode cleanup in `card-fraud-intelligence-portal`.
 
 ## Non-Goals (for Phase 0-2)
@@ -333,7 +334,7 @@ Acceptance:
 ### Problem
 
 Ops-agent currently defaults to exporting to a Rule Management endpoint:
-- `app/schemas/v1/rule_drafts.py` sets `target_endpoint="/api/v1/ops-agent-drafts/import"`
+- `app/schemas/v1/rule_drafts.py` now defaults `target_endpoint="/api/v1/rules"`
 
 Rule Management actual API is:
 - `POST /api/v1/rules` in `card-fraud-rule-management/app/api/routes/rules.py`
@@ -345,7 +346,7 @@ Option A (recommended):
   - `rule_name`, `description`, `rule_type`, `condition_tree`, `priority`, `action`
 
 Option B:
-- Add `/api/v1/ops-agent-drafts/import` to rule-management and keep ops-agent as-is.
+- Add a dedicated `/api/v1/ops-agent-drafts/import` compatibility route to rule-management and keep ops-agent as-is.
 
 Touch points in ops-agent:
 - `app/tools/_core/rule_draft_logic.py` (draft assembly)

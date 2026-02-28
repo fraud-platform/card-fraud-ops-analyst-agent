@@ -466,6 +466,15 @@ class ReasoningTool(BaseTool):
                 score_by_name[name] = float(row.get("score", 0.0) or 0.0)
             except TypeError, ValueError:
                 score_by_name[name] = 0.0
+        amount_anomaly_score = score_by_name.get("amount_anomaly", 0.0)
+        non_amount_pattern_max = max(
+            (
+                score
+                for name, score in score_by_name.items()
+                if name != "amount_anomaly" and isinstance(score, (int, float))
+            ),
+            default=0.0,
+        )
         critical_pattern_score = max(
             score_by_name.get("velocity", 0.0),
             score_by_name.get("decline_anomaly", 0.0),
@@ -476,9 +485,14 @@ class ReasoningTool(BaseTool):
         rule_matches = context_dict.get("rule_matches", [])
         rule_match_count = len(rule_matches) if isinstance(rule_matches, list) else 0
         decision = cls._decision(state)
+        isolated_moderate_amount_anomaly = (
+            amount_anomaly_score >= 0.65
+            and amount_anomaly_score <= 0.72
+            and non_amount_pattern_max <= 0.55
+        )
 
         has_strong_counter_evidence = (
-            max_pattern_score <= 0.60
+            (max_pattern_score <= 0.60 or isolated_moderate_amount_anomaly)
             and critical_pattern_score <= 0.55
             and similarity_score <= 0.7
             and similarity_match_count <= 10

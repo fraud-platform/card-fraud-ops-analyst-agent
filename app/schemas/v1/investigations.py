@@ -12,6 +12,8 @@ from app.schemas.v1.common import ModelMode, Severity
 class RunRequest(BaseModel):
     transaction_id: str = Field(..., min_length=1, description="Transaction UUID")
     mode: str = "FULL"
+    case_id: str | None = Field(default=None, max_length=128)
+    scenario_name: str | None = Field(default=None, max_length=128)
 
     @field_validator("transaction_id")
     @classmethod
@@ -79,6 +81,9 @@ class HypothesisDetailSchema(BaseModel):
 class InvestigationResponse(BaseModel):
     investigation_id: str
     transaction_id: str
+    case_id: str | None = None
+    scenario_name: str | None = None
+    trace_id: str | None = None
     status: str
     severity: str
     model_mode: ModelMode = ModelMode.AGENTIC

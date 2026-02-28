@@ -9,6 +9,8 @@ import uuid
 from contextvars import ContextVar
 from typing import Any
 
+from opentelemetry import trace as otel_trace
+
 # Request-scoped tracing context
 request_id_ctx: ContextVar[str | None] = ContextVar("request_id", default=None)
 trace_parent_ctx: ContextVar[str | None] = ContextVar("trace_parent", default=None)
@@ -80,3 +82,14 @@ def bind_contextvars_to_logging() -> dict[str, Any]:
     if tp := trace_parent_ctx.get():
         context["trace_parent"] = tp
     return context
+
+
+def get_current_trace_id() -> str | None:
+    """Return current OpenTelemetry trace_id as 32-char hex, when available."""
+    span = otel_trace.get_current_span()
+    if span is None:
+        return None
+    span_ctx = span.get_span_context()
+    if not span_ctx or not span_ctx.is_valid:
+        return None
+    return f"{span_ctx.trace_id:032x}"

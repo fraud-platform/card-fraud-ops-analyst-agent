@@ -135,13 +135,14 @@ def _request_json(
     url: str,
     *,
     body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, Any] | None, float, str | None]:
     start = time.perf_counter()
     try:
         if method == "POST":
-            response = client.post(url, json=body)
+            response = client.post(url, json=body, headers=headers)
         else:
-            response = client.get(url)
+            response = client.get(url, headers=headers)
         elapsed = (time.perf_counter() - start) * 1000
         payload: dict[str, Any] | None = None
         if response.headers.get("content-type", "").startswith("application/json"):
@@ -426,7 +427,9 @@ def _compute_kpis(
     all_latencies = [r.get("run_latency_ms", 0) or 0 for r in rows if r.get("run_latency_ms")]
     latency_p95 = _percentile(all_latencies, 0.95) if all_latencies else 0.0
 
-    trace_coverage = sum(1 for r in rows if r.get("tool_execution_count", 0) > 0)
+    trace_id_coverage = sum(
+        1 for r in rows if isinstance(r.get("trace_id"), str) and bool(r.get("trace_id"))
+    )
 
     return {
         "kpi_e2e_scenarios_pass_rate": {
@@ -466,10 +469,10 @@ def _compute_kpis(
             "description": "P95 investigation latency in ms",
         },
         "kpi_trace_coverage_rate": {
-            "value": trace_coverage / total,
+            "value": trace_id_coverage / total,
             "target": ">= 0.95",
-            "pass": trace_coverage / total >= 0.95,
-            "description": "scenarios with agent trace data",
+            "pass": trace_id_coverage / total >= 0.95,
+            "description": "scenarios with trace_id in investigation detail",
         },
     }
 
@@ -531,6 +534,7 @@ def run() -> int:
                 "evidence_count": 0,
                 "insight_evidence_count": 0,
                 "summary": "",
+                "trace_id": None,
                 "planner_step_count": 0,
                 "tool_execution_count": 0,
                 "planner_path": [],
@@ -543,12 +547,19 @@ def run() -> int:
                 "issues": [],
             }
 
-            run_body = {"transaction_id": transaction_id, "mode": "quick", "case_id": case_id}
+            run_body = {
+                "transaction_id": transaction_id,
+                "mode": "quick",
+                "case_id": case_id,
+                "scenario_name": scenario,
+            }
+            run_headers = {"X-Scenario-Name": scenario, "X-Case-ID": case_id}
             run_status, run_payload, run_ms, run_error = _request_json(
                 client,
                 "POST",
                 f"{API_PREFIX}/investigations/run",
                 body=run_body,
+                headers=run_headers,
             )
             row["run_status"] = run_status
             row["run_latency_ms"] = round(run_ms, 1)
@@ -580,6 +591,7 @@ def run() -> int:
                     client,
                     "POST",
                     f"{API_PREFIX}/investigations/{inv_id}/resume",
+                    headers=run_headers,
                 )
                 reporter.record_stage(
                     stage_name="Resume Existing Investigation",
@@ -613,6 +625,7 @@ def run() -> int:
                     client,
                     "GET",
                     f"{API_PREFIX}/investigations/{inv_id}",
+                    headers=run_headers,
                 )
                 reporter.record_stage(
                     stage_name=f"Get Investigation Detail (attempt {detail_attempts})",
@@ -776,6 +789,9 @@ def run() -> int:
             row["status"] = status
             row["severity"] = severity
             row["summary"] = summary
+            row["trace_id"] = (
+                detail_payload.get("trace_id") or _as_dict(run_payload).get("trace_id") or None
+            )
             row["recommendation_count"] = len(recommendations)
             row["recommendation_types"] = recommendation_types
             row["evidence_count"] = len(detail_evidence)
@@ -814,6 +830,8 @@ def run() -> int:
                 and row["empty_stage_io_steps"] == row["tool_execution_count"]
             ):
                 row["issues"].append("agent_stage_io_missing")
+            if not row.get("trace_id"):
+                row["issues"].append("trace_id_missing")
 
             if trace["failed_tools"]:
                 row["issues"].append(f"tool_failure:{len(trace['failed_tools'])}")
@@ -845,6 +863,7 @@ def run() -> int:
                     "insight_evidence_count": len(insight_evidence),
                     "issues": row["issues"],
                     "summary": summary,
+                    "trace_id": row.get("trace_id"),
                     "evidence_summary": evidence_summary[:10],
                     "planner_path": row["planner_path"],
                     "tool_path": row["tool_path"],

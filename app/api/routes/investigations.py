@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,27 +59,49 @@ async def list_investigations(
 @router.post("/run", response_model=InvestigationResponse)
 async def run_investigation(
     request: RunRequest,
+    http_request: Request,
+    response: Response,
     _auth: RequireOpsRun,
     session: AsyncSession = Depends(get_session),
 ):
     """Start a new fraud investigation."""
     service = InvestigationService(session)
+    scenario_name = (
+        request.scenario_name
+        or http_request.headers.get("X-Scenario-Name")
+        or http_request.headers.get("x-scenario-name")
+    )
+    case_id = (
+        request.case_id
+        or http_request.headers.get("X-Case-ID")
+        or http_request.headers.get("x-case-id")
+    )
     result = await service.run_investigation(
         transaction_id=request.transaction_id,
         mode=request.mode,
+        case_id=case_id,
+        scenario_name=scenario_name,
     )
+    if result.get("investigation_id"):
+        response.headers["X-Investigation-ID"] = str(result["investigation_id"])
+    if result.get("trace_id"):
+        response.headers["X-Trace-ID"] = str(result["trace_id"])
     return InvestigationResponse(**_map_state_to_response(result))
 
 
 @router.get("/{investigation_id}", response_model=InvestigationDetailResponse)
 async def get_investigation(
     investigation_id: str,
+    response: Response,
     _auth: RequireOpsRead,
     session: AsyncSession = Depends(get_session),
 ):
     """Get full investigation details."""
     service = InvestigationService(session)
     result = await service.get_investigation(investigation_id)
+    response.headers["X-Investigation-ID"] = investigation_id
+    if result.get("trace_id"):
+        response.headers["X-Trace-ID"] = str(result["trace_id"])
     return InvestigationDetailResponse(**result)
 
 
@@ -99,12 +121,16 @@ async def get_investigation_trace(
 @router.post("/{investigation_id}/resume", response_model=InvestigationResponse)
 async def resume_investigation(
     investigation_id: str,
+    response: Response,
     _auth: RequireOpsRun,
     session: AsyncSession = Depends(get_session),
 ):
     """Resume a failed or interrupted investigation."""
     service = InvestigationService(session)
     result = await service.resume_investigation(investigation_id)
+    response.headers["X-Investigation-ID"] = investigation_id
+    if result.get("trace_id"):
+        response.headers["X-Trace-ID"] = str(result["trace_id"])
     return InvestigationResponse(**_map_state_to_response(result))
 
 
@@ -142,6 +168,9 @@ def _map_state_to_response(state: dict) -> dict:
     return {
         "investigation_id": state["investigation_id"],
         "transaction_id": state["transaction_id"],
+        "case_id": state.get("case_id"),
+        "scenario_name": state.get("scenario_name"),
+        "trace_id": state.get("trace_id"),
         "status": state.get("status", "UNKNOWN"),
         "severity": state.get("severity", "LOW"),
         "model_mode": state.get("model_mode", "agentic"),

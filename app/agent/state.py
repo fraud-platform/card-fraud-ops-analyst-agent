@@ -45,6 +45,10 @@ class InvestigationState(TypedDict):
 
     investigation_id: str
     transaction_id: str
+    case_id: str | None
+    scenario_name: str | None
+    trace_id: str | None
+    model_mode: str
 
     context: dict[str, Any]
 
@@ -84,6 +88,9 @@ def create_initial_state(
     transaction_id: str,
     max_steps: int = 20,
     *,
+    case_id: str | None = None,
+    scenario_name: str | None = None,
+    trace_id: str | None = None,
     feature_flags: dict[str, bool] | None = None,
     safeguards: dict[str, int] | None = None,
 ) -> InvestigationState:
@@ -91,6 +98,10 @@ def create_initial_state(
     return InvestigationState(
         investigation_id=investigation_id,
         transaction_id=transaction_id,
+        case_id=case_id,
+        scenario_name=scenario_name,
+        trace_id=trace_id,
+        model_mode="agentic",
         context={},
         pattern_results={},
         similarity_results={},

@@ -3,6 +3,7 @@
 from app.core.tracing import (
     bind_contextvars_to_logging,
     clear_tracing_context,
+    get_current_trace_id,
     get_request_id,
     get_trace_parent,
     get_tracing_headers,
@@ -49,3 +50,21 @@ def test_clear_tracing_context_resets_headers():
     assert get_request_id() is None
     assert get_trace_parent() is None
     assert get_tracing_headers() == {}
+
+
+def test_get_current_trace_id_returns_none_without_valid_span():
+    assert get_current_trace_id() is None
+
+
+def test_get_current_trace_id_renders_otel_trace_id(monkeypatch):
+    class _SpanContext:
+        is_valid = True
+        trace_id = int("0123456789abcdef0123456789abcdef", 16)
+
+    class _Span:
+        @staticmethod
+        def get_span_context():
+            return _SpanContext()
+
+    monkeypatch.setattr("app.core.tracing.otel_trace.get_current_span", lambda: _Span())
+    assert get_current_trace_id() == "0123456789abcdef0123456789abcdef"

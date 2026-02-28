@@ -577,3 +577,66 @@ class TestReasoningTool:
         assert result["severity"] == "LOW"
         assert reasoning["llm_risk_level"] == "MEDIUM"
         assert reasoning["severity_calibration"] == "counter_evidence_no_pattern_cap"
+
+    @pytest.mark.asyncio
+    async def test_execute_caps_medium_with_isolated_amount_anomaly_when_counter_evidence_is_strong(
+        self, initial_state
+    ):
+        """Single moderate amount anomaly should not over-escalate an approved flow with strong counter evidence."""
+        from langchain_core.messages import AIMessage
+
+        state = {
+            **initial_state,
+            "context": {
+                "transaction": {
+                    "transaction_id": "txn-amount-counter-1",
+                    "amount": 100.0,
+                    "currency": "USD",
+                    "merchant_id": "merchant-unknown",
+                    "card_id": "card-unknown",
+                    "status": "APPROVE",
+                },
+                "transaction_context": {
+                    "3ds_verified": True,
+                    "avs_match": True,
+                    "cvv_match": True,
+                },
+                "rule_matches": [],
+            },
+            "pattern_results": {
+                "scores": [
+                    {"pattern_name": "amount_anomaly", "score": 0.7, "weight": 0.35, "details": {}},
+                    {"pattern_name": "velocity", "score": 0.0, "weight": 0.4, "details": {}},
+                    {"pattern_name": "decline_anomaly", "score": 0.0, "weight": 0.3, "details": {}},
+                    {"pattern_name": "card_testing", "score": 0.0, "weight": 0.35, "details": {}},
+                ],
+                "overall_score": 0.12,
+                "patterns_detected": ["amount_anomaly"],
+            },
+            "similarity_results": {
+                "matches": [
+                    {
+                        "transaction_id": "hist-legit-1",
+                        "score": 0.16,
+                        "counter_evidence": [{"type": "3ds_success", "strength": 0.8}],
+                    }
+                ],
+                "overall_score": 0.16,
+            },
+        }
+
+        mock_llm = AsyncMock()
+        mock_llm.ainvoke.return_value = AIMessage(
+            content=(
+                '{"narrative":"Low similarity with unknown merchant, classify as medium risk for review.",'
+                '"risk_level":"MEDIUM","key_findings":[],"hypotheses":[],"confidence":0.6}'
+            )
+        )
+        tool = ReasoningTool(llm=mock_llm)
+
+        result = await tool.execute(state)
+
+        reasoning = result["reasoning"]
+        assert result["severity"] == "LOW"
+        assert reasoning["llm_risk_level"] == "MEDIUM"
+        assert reasoning["severity_calibration"] == "counter_evidence_no_pattern_cap"

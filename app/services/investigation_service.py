@@ -17,6 +17,7 @@ from app.agent.state import create_initial_state
 from app.clients.tm_client import TMClient
 from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError
+from app.core.tracing import get_current_trace_id
 from app.llm.provider import get_chat_model
 from app.persistence.audit_repository import AuditRepository
 from app.persistence.insight_repository import InsightRepository
@@ -50,6 +51,9 @@ class InvestigationService:
         self,
         transaction_id: str,
         mode: str = "FULL",
+        *,
+        case_id: str | None = None,
+        scenario_name: str | None = None,
     ) -> dict[str, Any]:
         """Run a complete fraud investigation."""
         investigation_id = str(uuid.uuid7())
@@ -96,6 +100,8 @@ class InvestigationService:
         initial_state = create_initial_state(
             investigation_id=investigation_id,
             transaction_id=transaction_id,
+            case_id=case_id,
+            scenario_name=scenario_name,
             max_steps=self._settings.langgraph.max_steps,
             feature_flags={
                 "planner_llm_enabled": self._settings.planner.llm_enabled,
@@ -128,10 +134,21 @@ class InvestigationService:
                     span.set_attribute("investigation_id", investigation_id)
                     span.set_attribute("transaction_id", transaction_id)
                     span.set_attribute("mode", mode)
+                    span.set_attribute("model_mode", "agentic")
+                    if case_id:
+                        span.set_attribute("case_id", case_id)
+                    if scenario_name:
+                        span.set_attribute("scenario_name", scenario_name)
+                    trace_id = get_current_trace_id()
+                    if trace_id:
+                        span.set_attribute("trace_id", trace_id)
+                        initial_state["trace_id"] = trace_id
                     result = await graph.ainvoke(initial_state)
                     span.set_attribute("status", result.get("status", "COMPLETED"))
                     span.set_attribute("severity", result.get("severity", "LOW"))
                     span.set_attribute("step_count", result.get("step_count", 0))
+                    if trace_id and not result.get("trace_id"):
+                        result = {**result, "trace_id": trace_id}
         except TimeoutError:
             result = {
                 **initial_state,
@@ -239,7 +256,26 @@ class InvestigationService:
 
         try:
             async with asyncio.timeout(self._settings.langgraph.investigation_timeout_seconds):
-                result = await graph.ainvoke(state)
+                with tracer.start_as_current_span("investigation.resume") as span:
+                    span.set_attribute("investigation_id", investigation_id)
+                    if state.get("transaction_id"):
+                        span.set_attribute("transaction_id", state["transaction_id"])
+                    span.set_attribute("model_mode", "agentic")
+                    if state.get("case_id"):
+                        span.set_attribute("case_id", state["case_id"])
+                    if state.get("scenario_name"):
+                        span.set_attribute("scenario_name", state["scenario_name"])
+                    trace_id = get_current_trace_id()
+                    if trace_id:
+                        span.set_attribute("trace_id", trace_id)
+                        if not state.get("trace_id"):
+                            state["trace_id"] = trace_id
+                    result = await graph.ainvoke(state)
+                    span.set_attribute("status", result.get("status", "COMPLETED"))
+                    span.set_attribute("severity", result.get("severity", "LOW"))
+                    span.set_attribute("step_count", result.get("step_count", 0))
+                    if trace_id and not result.get("trace_id"):
+                        result = {**result, "trace_id": trace_id}
         except TimeoutError:
             result = {
                 **state,
@@ -593,6 +629,8 @@ class InvestigationService:
         """Backfill stable API fields used by E2E and downstream report tooling."""
         response = dict(payload)
         response["model_mode"] = str(response.get("model_mode") or "agentic")
+        trace_id = response.get("trace_id")
+        response["trace_id"] = str(trace_id) if isinstance(trace_id, str) and trace_id else None
         raw_hypotheses = response.get("hypotheses")
         response["hypothesis_details"] = self._normalize_hypothesis_details(raw_hypotheses)
         response["hypotheses"] = self._normalize_hypotheses(raw_hypotheses)
