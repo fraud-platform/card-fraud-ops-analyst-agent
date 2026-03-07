@@ -24,6 +24,28 @@ class RecommendationService:
         self.recommendation_repo = RecommendationRepository(session)
         self.audit_repo = AuditRepository(session)
 
+    @staticmethod
+    def _normalize_recommendation_type(rec_type: str) -> str:
+        """Normalize legacy or malformed recommendation types to current enum values."""
+        if not rec_type:
+            return "review_priority"
+
+        normalized = str(rec_type).strip()
+        legacy_map = {
+            "REVIEW": "review_priority",
+            "review": "review_priority",
+            "REVIEW_PRIORITY": "review_priority",
+            "CASE_ACTION": "case_action",
+            "RULE_CANDIDATE": "rule_candidate",
+        }
+        if normalized in legacy_map:
+            return legacy_map[normalized]
+
+        normalized = normalized.lower()
+        if normalized in {"review_priority", "case_action", "rule_candidate"}:
+            return normalized
+        return "review_priority"
+
     async def list_worklist(
         self,
         limit: int = 50,
@@ -31,11 +53,16 @@ class RecommendationService:
         severity: str | None = None,
     ) -> tuple[list[dict[str, Any]], str | None]:
         """List recommendations in worklist."""
-        return await self.recommendation_repo.list_open(
+        recommendations, next_cursor = await self.recommendation_repo.list_open(
             limit=limit,
             cursor=cursor,
             severity=severity,
         )
+        for recommendation in recommendations:
+            recommendation["type"] = self._normalize_recommendation_type(
+                recommendation.get("type", "")
+            )
+        return recommendations, next_cursor
 
     async def acknowledge(
         self,

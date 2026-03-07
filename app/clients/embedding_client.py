@@ -20,7 +20,7 @@ class EmbeddingResponse:
 
 
 class EmbeddingClient:
-    """Client for generating embeddings via an Ollama-compatible endpoint."""
+    """OpenAI-compatible embeddings client."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
@@ -31,43 +31,33 @@ class EmbeddingClient:
             raise ValueError("VECTOR_API_BASE is required when VECTOR_ENABLED=true")
 
         base_url = config.api_base.rstrip("/")
-        url = f"{base_url}/embed"
+        url = f"{base_url}/embeddings"
+        body: dict = {
+            "model": config.model_name,
+            "input": text,
+            "dimensions": config.dimension,
+        }
 
-        timeout = httpx.Timeout(config.request_timeout_s)
-        headers: dict[str, str] = {}
-
-        # Add distributed tracing headers
-        headers.update(get_tracing_headers())
-
+        headers: dict[str, str] = {**get_tracing_headers()}
         if config.api_key and config.api_key.get_secret_value():
             headers["Authorization"] = f"Bearer {config.api_key.get_secret_value()}"
 
+        timeout = httpx.Timeout(config.request_timeout_s)
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-            response = await client.post(
-                url,
-                json={
-                    "model": config.model_name,
-                    "input": text,
-                },
-                headers=headers,
-            )
+            response = await client.post(url, json=body, headers=headers)
             response.raise_for_status()
             payload = response.json()
 
-        embedding: list[float] | None = None
-        embeddings = payload.get("embeddings")
-        if isinstance(embeddings, list) and embeddings:
-            first = embeddings[0]
-            if isinstance(first, list) and first:
-                embedding = [float(v) for v in first]
+        # OpenAI format: {"data": [{"embedding": [...], "index": 0}]}
+        data_list = payload.get("data")
+        if isinstance(data_list, list) and data_list:
+            first = data_list[0]
+            if isinstance(first, dict):
+                emb = first.get("embedding")
+                if isinstance(emb, list) and emb:
+                    return EmbeddingResponse(
+                        embedding=[float(v) for v in emb],
+                        model=str(payload.get("model") or config.model_name),
+                    )
 
-        if embedding is None:
-            single = payload.get("embedding")
-            if isinstance(single, list) and single:
-                embedding = [float(v) for v in single]
-
-        if embedding is None:
-            raise ValueError("Embedding provider returned invalid embedding payload")
-
-        model_name = str(payload.get("model") or config.model_name)
-        return EmbeddingResponse(embedding=embedding, model=model_name)
+        raise ValueError("Embedding provider returned invalid embedding payload")

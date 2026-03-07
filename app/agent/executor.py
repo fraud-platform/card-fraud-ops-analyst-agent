@@ -152,6 +152,30 @@ def _summarize_similarity_results(similarity_results_raw: Any) -> dict[str, Any]
     return summary
 
 
+def _summarize_link_analysis_results(link_analysis_raw: Any) -> dict[str, Any]:
+    link_analysis = as_dict(link_analysis_raw)
+    signals = [str(item) for item in as_list(link_analysis.get("signals")) if item is not None]
+    hypotheses = [
+        item for item in as_list(link_analysis.get("hypotheses")) if isinstance(item, dict)
+    ]
+    metrics = as_dict(link_analysis.get("metrics"))
+    card_fan_out = as_dict(metrics.get("card_fan_out"))
+    merchant_fan_in = as_dict(metrics.get("merchant_fan_in"))
+    return {
+        "overall_score": float(link_analysis.get("overall_score", 0.0) or 0.0),
+        "signals_count": len(signals),
+        "signals": signals[:8],
+        "hypotheses_count": len(hypotheses),
+        "key_metrics": {
+            "card_fan_out_1h": int(card_fan_out.get("distinct_merchants_1h", 0) or 0),
+            "card_fan_out_24h": int(card_fan_out.get("distinct_merchants_24h", 0) or 0),
+            "merchant_fan_in_1h": int(merchant_fan_in.get("distinct_cards_1h", 0) or 0),
+            "merchant_fan_in_24h": int(merchant_fan_in.get("distinct_cards_24h", 0) or 0),
+        },
+        "summary": str(link_analysis.get("summary", ""))[:240],
+    }
+
+
 def _summarize_reasoning(reasoning_raw: Any) -> dict[str, Any]:
     reasoning = as_dict(reasoning_raw)
     findings = as_list(reasoning.get("key_findings"))
@@ -192,13 +216,28 @@ def _build_input_summary(state: InvestigationState, tool_name: str) -> dict[str,
         "step_count": state.get("step_count", 0),
         "completed_steps": list(state.get("completed_steps", [])),
     }
-    if tool_name in {"pattern_tool", "similarity_tool", "reasoning_tool", "recommendation_tool"}:
+    if tool_name in {
+        "pattern_tool",
+        "similarity_tool",
+        "link_analysis_tool",
+        "reasoning_tool",
+        "recommendation_tool",
+    }:
         summary["context"] = _summarize_context(state.get("context"))
-    if tool_name in {"similarity_tool", "reasoning_tool", "recommendation_tool"}:
+    if tool_name in {
+        "similarity_tool",
+        "link_analysis_tool",
+        "reasoning_tool",
+        "recommendation_tool",
+    }:
         summary["pattern_results"] = _summarize_pattern_results(state.get("pattern_results"))
-    if tool_name in {"reasoning_tool", "recommendation_tool"}:
+    if tool_name in {"link_analysis_tool", "reasoning_tool", "recommendation_tool"}:
         summary["similarity_results"] = _summarize_similarity_results(
             state.get("similarity_results")
+        )
+    if tool_name in {"reasoning_tool", "recommendation_tool"}:
+        summary["link_analysis_results"] = _summarize_link_analysis_results(
+            state.get("link_analysis_results")
         )
     if tool_name == "recommendation_tool":
         summary["reasoning"] = _summarize_reasoning(state.get("reasoning"))
@@ -243,6 +282,10 @@ def _build_output_summary(
     elif tool_name == "similarity_tool":
         summary["similarity_results"] = _summarize_similarity_results(
             state.get("similarity_results")
+        )
+    elif tool_name == "link_analysis_tool":
+        summary["link_analysis_results"] = _summarize_link_analysis_results(
+            state.get("link_analysis_results")
         )
     elif tool_name == "reasoning_tool":
         summary["reasoning"] = _summarize_reasoning(state.get("reasoning"))
@@ -301,11 +344,19 @@ def _append_step(
     tool_name: str,
     execution: ToolExecution,
 ) -> dict[str, Any]:
-    """Return state with tool_name appended to completed_steps and execution appended to tool_executions."""
+    """Return updated state with execution appended.
+
+    Note: Only mark a step as completed when the tool execution succeeded.
+    Failed or timed out tools may be retried by the planner.
+    """
+    existing_completed = list(state.get("completed_steps", []))
+    if str(execution.get("status", "")).upper() == "SUCCESS":
+        existing_completed.append(tool_name)
+
     return {
         **state,
-        "completed_steps": [*state["completed_steps"], tool_name],
-        "tool_executions": [*state["tool_executions"], execution],
+        "completed_steps": existing_completed,
+        "tool_executions": [*state.get("tool_executions", []), execution],
     }
 
 

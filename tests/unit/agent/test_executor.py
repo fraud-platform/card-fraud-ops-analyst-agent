@@ -81,6 +81,47 @@ class _FailingReasoningTool(BaseTool):
         raise RuntimeError("simulated reasoning timeout")
 
 
+class _LinkAnalysisTool(BaseTool):
+    @property
+    def name(self) -> str:
+        return "link_analysis_tool"
+
+    @property
+    def description(self) -> str:
+        return "dummy link analysis tool"
+
+    async def execute(self, state):  # noqa: ANN001
+        return {
+            **state,
+            "link_analysis_results": {
+                "metrics": {
+                    "card_fan_out": {
+                        "distinct_merchants_5m": 2,
+                        "distinct_merchants_1h": 6,
+                        "distinct_merchants_24h": 10,
+                        "burst_score": 0.75,
+                    },
+                    "merchant_fan_in": {
+                        "distinct_cards_1h": 7,
+                        "distinct_cards_24h": 14,
+                        "burst_score": 0.7,
+                    },
+                },
+                "signals": ["card_testing_signature"],
+                "hypotheses": [
+                    {
+                        "hypothesis": "Card testing likely",
+                        "confidence": 0.75,
+                        "supporting_evidence": ["distinct_merchants_1h=6"],
+                    }
+                ],
+                "summary": "Card fan-out is elevated.",
+                "overall_score": 0.75,
+            },
+            "severity": "HIGH",
+        }
+
+
 def test_executor_records_input_and_output_summaries() -> None:
     state = create_initial_state("inv-exec-1", "txn-exec-1")
     state["context"] = {
@@ -202,8 +243,20 @@ def test_executor_reasoning_failure_summary_includes_llm_status() -> None:
     }
     state["pattern_results"] = {"scores": [], "overall_score": 0.0, "patterns_detected": []}
     state["similarity_results"] = {"overall_score": 0.0, "matches": []}
-    state["completed_steps"] = ["context_tool", "pattern_tool", "similarity_tool"]
-    state["step_count"] = 3
+    state["link_analysis_results"] = {
+        "metrics": {},
+        "signals": [],
+        "hypotheses": [],
+        "summary": "",
+        "overall_score": 0.0,
+    }
+    state["completed_steps"] = [
+        "context_tool",
+        "pattern_tool",
+        "similarity_tool",
+        "link_analysis_tool",
+    ]
+    state["step_count"] = 4
     state["next_action"] = "reasoning_tool"
 
     registry = ToolRegistry()
@@ -213,3 +266,38 @@ def test_executor_reasoning_failure_summary_includes_llm_status() -> None:
     execution = result["tool_executions"][-1]
     assert execution["status"] == "FAILED"
     assert execution["output_summary"]["reasoning"]["llm_status"] == "failed"
+
+
+def test_executor_link_analysis_summary_is_populated() -> None:
+    state = create_initial_state("inv-exec-5", "txn-exec-5")
+    state["context"] = {
+        "transaction": {
+            "transaction_id": "txn-exec-5",
+            "amount": 80.0,
+            "currency": "USD",
+            "decision": "DECLINE",
+            "card_id": "card-5",
+            "merchant_id": "merchant-5",
+        },
+        "windows": {"1": {"transaction_count": 2}},
+        "signals": [],
+        "rule_matches": [],
+        "card_history": [],
+    }
+    state["pattern_results"] = {"scores": [], "overall_score": 0.0, "patterns_detected": []}
+    state["similarity_results"] = {"overall_score": 0.0, "matches": []}
+    state["completed_steps"] = ["context_tool", "pattern_tool", "similarity_tool"]
+    state["step_count"] = 3
+    state["next_action"] = "link_analysis_tool"
+
+    registry = ToolRegistry()
+    registry.register(_LinkAnalysisTool())
+
+    result = asyncio.run(executor_node(state, registry))
+    execution = result["tool_executions"][-1]
+
+    assert execution["status"] == "SUCCESS"
+    link_summary = execution["output_summary"]["link_analysis_results"]
+    assert link_summary["signals_count"] == 1
+    assert link_summary["hypotheses_count"] == 1
+    assert link_summary["key_metrics"]["card_fan_out_1h"] == 6

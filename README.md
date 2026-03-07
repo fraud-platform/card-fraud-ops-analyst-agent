@@ -11,7 +11,7 @@ Quality gates are enforced via pre-commit/pre-push hooks and the documented comm
 
 - Python 3.14, FastAPI, async SQLAlchemy (asyncpg)
 - Auth0 JWT authentication with scope-based authorization
-- Ollama Cloud chat model adapter for planner and reasoning stages
+- OpenAI chat model adapter (`gpt-5-mini`) for planner and reasoning stages
 - OpenTelemetry + Prometheus for observability
 - PostgreSQL: reads `fraud_gov` schema, writes `ops_agent_*` tables
 - Port: 8003
@@ -189,6 +189,20 @@ This is an intelligence platform with agentic analysis, not autonomous adjudicat
 - Governance boundary: human analysts remain the decision authority for fraud disposition and rule activation.
 - Outcome focus: improve analyst speed and consistency with explainable, auditable, evidence-backed recommendations.
 - Auditability proof in API: investigation responses include `agentic_trace`, `action_plan`, and `evidence_gaps` for per-run AI/tool usage evidence.
+
+### AI/Model Runtime Map
+
+- LLM chat calls: `planner_node` and `reasoning_tool` only (OpenAI `/chat/completions`).
+- Embedding/Vector calls: `similarity_tool` only (`/api/embed` + pgvector similarity query).
+- No LLM calls in:
+  - `context_tool`
+  - `pattern_tool`
+  - `link_analysis_tool`
+  - `recommendation_tool`
+  - `rule_draft_tool`
+  - `completion_node`
+
+So yes, this is agentic: the LLM governs runtime planning and reasoning synthesis, while final output packaging and most analysis steps remain deterministic and auditable.
 
 ## Documentation
 

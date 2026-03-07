@@ -101,12 +101,25 @@ def state_with_analysis(state_with_context):
             "matches": [],
             "overall_score": 0.0,
         },
+        "link_analysis_results": {
+            "metrics": {},
+            "signals": [],
+            "hypotheses": [],
+            "summary": "",
+            "overall_score": 0.0,
+        },
         "evidence": [
             {"category": "pattern_analysis", "tool": "pattern_tool"},
             {"category": "similarity_analysis", "tool": "similarity_tool"},
+            {"category": "link_analysis", "tool": "link_analysis_tool"},
         ],
-        "completed_steps": ["context_tool", "pattern_tool", "similarity_tool"],
-        "step_count": 3,
+        "completed_steps": [
+            "context_tool",
+            "pattern_tool",
+            "similarity_tool",
+            "link_analysis_tool",
+        ],
+        "step_count": 4,
     }
 
 
@@ -155,6 +168,7 @@ def mock_registry(mock_tool_factory):
         "context_tool",
         "pattern_tool",
         "similarity_tool",
+        "link_analysis_tool",
         "reasoning_tool",
         "recommendation_tool",
         "rule_draft_tool",
@@ -184,6 +198,9 @@ def mock_tm_client():
     }
     client.get_card_history.return_value = []
     client.get_merchant_history.return_value = []
+    client.get_ip_neighborhood.return_value = []
+    client.get_device_neighborhood.return_value = []
+    client.get_device_fingerprint_neighborhood.return_value = []
     client.health_check.return_value = True
     client.close.return_value = None
     return client

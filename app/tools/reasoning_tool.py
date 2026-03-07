@@ -74,7 +74,54 @@ If evidence is insufficient, explicitly state that in narrative/key_findings and
 Do not speculate beyond the provided data.
 """
 
+REASONING_RESPONSE_FORMAT = {
+    "type": "object",
+    "properties": {
+        "narrative": {"type": "string"},
+        "risk_level": {
+            "type": "string",
+            "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+        },
+        "key_findings": {"type": "array", "items": {"type": "string"}},
+        "hypotheses": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "hypothesis": {"type": "string"},
+                    "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                    "supporting_evidence": {"type": "array", "items": {"type": "string"}},
+                    "contradicting_evidence": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": [
+                    "hypothesis",
+                    "confidence",
+                    "supporting_evidence",
+                    "contradicting_evidence",
+                ],
+            },
+        },
+        "known_facts": {"type": "array", "items": {"type": "string"}},
+        "unknowns": {"type": "array", "items": {"type": "string"}},
+        "what_would_change_mind": {"type": "array", "items": {"type": "string"}},
+        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "evidence_citations": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "narrative",
+        "risk_level",
+        "key_findings",
+        "hypotheses",
+        "known_facts",
+        "unknowns",
+        "what_would_change_mind",
+        "confidence",
+        "evidence_citations",
+    ],
+}
+
 REASONING_MIN_MAX_TOKENS = 1024
+REASONING_MAX_REPAIR_ATTEMPTS = 2
 LOW_RISK_LANGUAGE_MARKERS = (
     "no patterns detected",
     "no detected patterns",
@@ -103,25 +150,53 @@ class ReasoningTool(BaseTool):
         self._llm = llm
         self._settings = settings
 
+    @staticmethod
+    def _repair_instruction(previous_response: str) -> str:
+        preview = previous_response.strip().replace("\u0000", "")
+        if len(preview) > 2000:
+            preview = preview[:2000] + "…"
+        return (
+            "Your previous response did not meet the required format. "
+            "Return ONLY a single RAW JSON object matching the schema in the system prompt "
+            "(no markdown, no code fences, no commentary).\n\n"
+            "Previous response (for reference):\n"
+            f"{preview}"
+        )
+
     async def execute(self, state: InvestigationState) -> InvestigationState:
         from app.core.config import get_settings
 
         settings = self._settings or get_settings()
         prompt_guard_enabled = settings.llm.prompt_guard_enabled
+        reasoning_enabled = bool(
+            get_attr(get_attr(settings, "features", None), "enable_llm_reasoning", True)
+        )
 
         with tracer.start_as_current_span("tool.reasoning") as span:
             span.set_attribute("investigation_id", state["investigation_id"])
             span.set_attribute("tool_name", self.name)
 
+            if not reasoning_enabled:
+                span.set_attribute("reasoning_llm_enabled", False)
+                message = "LLM reasoning disabled by OPS_AGENT_ENABLE_LLM_REASONING"
+                logger.error(
+                    "Reasoning tool LLM disabled by feature flag",
+                    investigation_id=state["investigation_id"],
+                    error=message,
+                )
+                raise RuntimeError(message)
+
             context = state["context"]
             pattern_results = state["pattern_results"]
             similarity_results = state["similarity_results"]
+            link_analysis_results = state.get("link_analysis_results", {})
 
             redacted_context = redact_state_for_llm(context)
             prompt_payload = assemble_prompt_payload(
                 context=redacted_context,
                 pattern_analysis=pattern_results,
                 similarity_analysis=similarity_results,
+                link_analysis=link_analysis_results,
             )
 
             if prompt_guard_enabled:
@@ -138,13 +213,8 @@ class ReasoningTool(BaseTool):
                     ops_agent_llm_calls_total.labels(
                         purpose="reasoning", status="blocked_by_guard"
                     ).inc()
-                    reasoning = self._reasoning_unavailable(
-                        state,
-                        status="blocked_by_guard",
-                        error_detail=f"Prompt guard blocked: {'; '.join(validation_errors[:3])}",
-                        prompt_guard_errors=validation_errors[:5],
-                    )
-                    return self._apply_unavailable_reasoning(state, reasoning)
+                    error_preview = "; ".join([str(err) for err in validation_errors[:5]])
+                    raise ValueError(f"Prompt guard blocked: {error_preview}")
 
             messages = [
                 SystemMessage(content=REASONING_SYSTEM_PROMPT),
@@ -168,6 +238,8 @@ class ReasoningTool(BaseTool):
                         max_tokens=max(
                             settings.llm.max_completion_tokens, REASONING_MIN_MAX_TOKENS
                         ),
+                        request_timeout=float(settings.llm.stage_timeout_seconds),
+                        response_format=REASONING_RESPONSE_FORMAT,
                     )
             except TimeoutError:
                 elapsed = time.perf_counter() - start_time
@@ -181,15 +253,7 @@ class ReasoningTool(BaseTool):
                     investigation_id=state["investigation_id"],
                     timeout_seconds=settings.llm.stage_timeout_seconds,
                 )
-                reasoning = self._reasoning_unavailable(
-                    state,
-                    status="timeout",
-                    error_detail=(
-                        f"TimeoutError: LLM reasoning call exceeded "
-                        f"{settings.llm.stage_timeout_seconds}s"
-                    ),
-                )
-                return self._apply_unavailable_reasoning(state, reasoning)
+                raise
             except Exception as exc:
                 elapsed = time.perf_counter() - start_time
                 ops_agent_llm_latency_seconds.labels(purpose="reasoning").observe(elapsed)
@@ -200,12 +264,7 @@ class ReasoningTool(BaseTool):
                     investigation_id=state["investigation_id"],
                     error=str(exc),
                 )
-                reasoning = self._reasoning_unavailable(
-                    state,
-                    status="error",
-                    error_detail=f"{type(exc).__name__}: {exc}",
-                )
-                return self._apply_unavailable_reasoning(state, reasoning)
+                raise
 
             elapsed = time.perf_counter() - start_time
             ops_agent_llm_latency_seconds.labels(purpose="reasoning").observe(elapsed)
@@ -237,28 +296,85 @@ class ReasoningTool(BaseTool):
                 },
             )
 
-            try:
-                reasoning = parse_llm_response(response_content)
-            except ValueError as exc:
-                ops_agent_llm_calls_total.labels(purpose="reasoning", status="parse_error").inc()
-                logger.warning(
-                    "Reasoning tool returned non-parseable payload",
-                    investigation_id=state["investigation_id"],
-                    error=str(exc),
-                    response_length=len(str(response.content)),
-                )
-                reasoning = self._reasoning_unavailable(
-                    state,
-                    status="parse_error",
-                    error_detail=str(exc),
-                )
-                return self._apply_unavailable_reasoning(state, reasoning)
+            parse_attempt = 0
+            current_content = response_content
+            while True:
+                try:
+                    reasoning = parse_llm_response(current_content)
+                    break
+                except ValueError as exc:
+                    status_label = "parse_error" if parse_attempt == 0 else "repair_parse_error"
+                    ops_agent_llm_calls_total.labels(purpose="reasoning", status=status_label).inc()
+                    logger.warning(
+                        "Reasoning tool returned non-parseable payload",
+                        investigation_id=state["investigation_id"],
+                        attempt=parse_attempt + 1,
+                        max_attempts=REASONING_MAX_REPAIR_ATTEMPTS + 1,
+                        error=str(exc),
+                        response_length=len(current_content),
+                    )
+                    span.add_event(
+                        "llm.response_parse_error",
+                        {
+                            "purpose": "reasoning",
+                            "attempt": parse_attempt + 1,
+                            "error": str(exc)[:240],
+                            "response_preview": current_content[:240],
+                        },
+                    )
+                    if parse_attempt >= REASONING_MAX_REPAIR_ATTEMPTS:
+                        raise
+
+                    repair_messages = [
+                        *messages,
+                        HumanMessage(content=self._repair_instruction(current_content)),
+                    ]
+
+                    start_time = time.perf_counter()
+                    try:
+                        async with asyncio.timeout(settings.llm.stage_timeout_seconds):
+                            repair_response = await self._llm.ainvoke(
+                                repair_messages,
+                                max_tokens=max(
+                                    settings.llm.max_completion_tokens,
+                                    REASONING_MIN_MAX_TOKENS,
+                                ),
+                                request_timeout=float(settings.llm.stage_timeout_seconds),
+                                response_format=REASONING_RESPONSE_FORMAT,
+                            )
+                    except Exception as repair_exc:
+                        elapsed = time.perf_counter() - start_time
+                        ops_agent_llm_latency_seconds.labels(purpose="reasoning").observe(elapsed)
+                        ops_agent_llm_calls_total.labels(
+                            purpose="reasoning", status="repair_error"
+                        ).inc()
+                        span.set_attribute("error", str(repair_exc))
+                        logger.error(
+                            "Reasoning tool repair call failed",
+                            investigation_id=state["investigation_id"],
+                            attempt=parse_attempt + 1,
+                            error=str(repair_exc),
+                        )
+                        raise
+
+                    elapsed = time.perf_counter() - start_time
+                    ops_agent_llm_latency_seconds.labels(purpose="reasoning").observe(elapsed)
+                    current_content = str(repair_response.content)
+                    span.add_event(
+                        "llm.repair_response",
+                        {
+                            "purpose": "reasoning",
+                            "attempt": parse_attempt + 1,
+                            "content_length": len(current_content),
+                        },
+                    )
+                    parse_attempt += 1
 
             if "summary" not in reasoning and isinstance(reasoning.get("narrative"), str):
                 narrative = reasoning["narrative"].strip()
                 if narrative:
                     reasoning["summary"] = narrative
-            llm_status = "partial_parse" if bool(reasoning.get("_partial_parse")) else "success"
+            llm_status = "success"
             ops_agent_llm_calls_total.labels(purpose="reasoning", status=llm_status).inc()
             reasoning["llm_status"] = llm_status
 
@@ -294,31 +410,6 @@ class ReasoningTool(BaseTool):
                 severity=severity,
                 confidence_score=float(confidence),
             )
-
-    @classmethod
-    def _apply_unavailable_reasoning(
-        cls,
-        state: InvestigationState,
-        reasoning: dict[str, object],
-    ) -> InvestigationState:
-        severity = cls._max_severity(
-            cls._normalize_severity(state.get("severity"), default="LOW"),
-            cls._normalize_severity(reasoning.get("severity"), default="LOW"),
-        )
-        try:
-            current_conf = float(state.get("confidence_score", 0.0) or 0.0)
-        except TypeError, ValueError:
-            current_conf = 0.0
-        try:
-            fallback_conf = float(reasoning.get("confidence", 0.0) or 0.0)
-        except TypeError, ValueError:
-            fallback_conf = 0.0
-        return update_state(
-            state,
-            reasoning=reasoning,
-            severity=severity,
-            confidence_score=max(current_conf, fallback_conf),
-        )
 
     @staticmethod
     def _normalize_severity(value: object, *, default: str) -> str:
@@ -576,128 +667,3 @@ class ReasoningTool(BaseTool):
             if any(marker in normalized for marker in LOW_RISK_LANGUAGE_MARKERS):
                 output[key] = cls._rewrite_low_risk_language(value, state)
         return output
-
-    @classmethod
-    def _derive_fallback_severity(cls, state: InvestigationState) -> str:
-        base = cls._normalize_severity(state.get("severity"), default="LOW")
-        score_by_name: dict[str, float] = {}
-        for row in cls._pattern_rows(state):
-            name = row.get("pattern_name")
-            if not isinstance(name, str):
-                continue
-            try:
-                score_by_name[name] = float(row.get("score", 0.0) or 0.0)
-            except TypeError, ValueError:
-                score_by_name[name] = 0.0
-
-        velocity = score_by_name.get("velocity", 0.0)
-        decline = score_by_name.get("decline_anomaly", 0.0)
-        card_testing = score_by_name.get("card_testing", 0.0)
-        medium_signal_count = sum(1 for score in score_by_name.values() if score >= 0.5)
-
-        context = state.get("context", {}) if isinstance(state, dict) else {}
-        context_dict = context if isinstance(context, dict) else {}
-        signals = context_dict.get("signals", [])
-        signal_names: set[str] = set()
-        if isinstance(signals, list):
-            for signal in signals:
-                name = (
-                    signal.get("name")
-                    if isinstance(signal, dict)
-                    else getattr(signal, "name", None)
-                )
-                if isinstance(name, str) and name:
-                    signal_names.add(name)
-
-        has_decline_signal = "decline_reason" in signal_names
-        has_rule_match_signal = "has_rule_matches" in signal_names
-
-        derived = base
-        if velocity >= 0.9 and (decline >= 0.5 or has_decline_signal or has_rule_match_signal):
-            derived = cls._max_severity(derived, "HIGH")
-        elif velocity >= 0.7 and (has_decline_signal or has_rule_match_signal):
-            derived = cls._max_severity(derived, "MEDIUM")
-        elif decline >= 0.7 and (velocity >= 0.5 or card_testing >= 0.5):
-            derived = cls._max_severity(derived, "HIGH")
-        elif medium_signal_count >= 2:
-            derived = cls._max_severity(derived, "MEDIUM")
-
-        return derived
-
-    @classmethod
-    def _fallback_findings(cls, state: InvestigationState) -> list[str]:
-        findings = ["Evidence-based fallback synthesis applied."]
-        for row in cls._pattern_rows(state):
-            name = str(row.get("pattern_name") or "")
-            if not name:
-                continue
-            try:
-                score = float(row.get("score", 0.0) or 0.0)
-            except TypeError, ValueError:
-                continue
-            if score < 0.5:
-                continue
-            details = row.get("details")
-            detail_text = ""
-            if isinstance(details, dict):
-                if name == "velocity" and "burst_1h" in details:
-                    detail_text = f"burst_1h={details.get('burst_1h')}"
-                elif name == "decline_anomaly" and "decline_ratio_24h" in details:
-                    detail_text = f"decline_ratio_24h={details.get('decline_ratio_24h')}"
-                elif name == "cross_merchant" and "unique_merchants_24h" in details:
-                    detail_text = f"unique_merchants_24h={details.get('unique_merchants_24h')}"
-            if detail_text:
-                findings.append(f"{name} score {score:.2f} ({detail_text})")
-            else:
-                findings.append(f"{name} score {score:.2f}")
-        return findings[:6]
-
-    @classmethod
-    def _fallback_confidence(cls, state: InvestigationState, severity: str) -> float:
-        max_score = 0.0
-        for row in cls._pattern_rows(state):
-            try:
-                score = float(row.get("score", 0.0) or 0.0)
-            except TypeError, ValueError:
-                score = 0.0
-            max_score = max(max_score, score)
-        if severity in {"HIGH", "CRITICAL"}:
-            return round(max(max_score, 0.7), 3)
-        if severity == "MEDIUM":
-            return round(max(max_score, 0.5), 3)
-        if max_score > 0:
-            return round(min(max_score, 0.35), 3)
-        return 0.1
-
-    @classmethod
-    def _reasoning_unavailable(
-        cls,
-        state: InvestigationState,
-        *,
-        status: str,
-        error_detail: str,
-        prompt_guard_errors: list[str] | None = None,
-    ) -> dict[str, object]:
-        severity = cls._derive_fallback_severity(state)
-        findings = cls._fallback_findings(state)
-        confidence = cls._fallback_confidence(state, severity)
-        summary_facts = (
-            "; ".join(findings[1:3]) if len(findings) > 1 else "limited risk signals observed"
-        )
-        payload: dict[str, object] = {
-            "narrative": (
-                "Evidence-based fallback synthesis applied because model output was not "
-                "usable for strict JSON extraction."
-            ),
-            "summary": f"Evidence fallback ({severity}): {summary_facts}",
-            "risk_level": severity,
-            "severity": severity,
-            "key_findings": findings,
-            "hypotheses": [],
-            "confidence": confidence,
-            "llm_status": status,
-            "error_detail": error_detail[:240],
-        }
-        if prompt_guard_errors:
-            payload["prompt_guard_errors"] = prompt_guard_errors
-        return payload

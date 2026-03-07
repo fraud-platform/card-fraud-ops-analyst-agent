@@ -125,12 +125,12 @@ def test_feature_flags_defaults():
 def test_vector_search_defaults():
     config = VectorSearchConfig()
     assert config.enabled is True
-    assert config.api_base == "http://localhost:11434/api"
+    assert config.api_base == "https://api.openai.com/v1"
 
 
-def test_vector_search_defaults_use_host_alias_in_container(monkeypatch):
-    monkeypatch.delenv("VECTOR_API_BASE", raising=False)
+def test_vector_search_rewrites_explicit_localhost_in_container(monkeypatch):
     monkeypatch.setenv("OPS_AGENT_DOCKER_RUNTIME", "true")
+    monkeypatch.setenv("VECTOR_API_BASE", "http://localhost:11434/api")
     config = VectorSearchConfig()
     assert config.api_base == "http://host.docker.internal:11434/api"
 
@@ -140,6 +140,54 @@ def test_vector_search_keeps_explicit_api_base_in_container(monkeypatch):
     monkeypatch.setenv("VECTOR_API_BASE", "http://vector-provider:11434/api")
     config = VectorSearchConfig()
     assert config.api_base == "http://vector-provider:11434/api"
+
+
+def test_vector_search_does_not_inherit_cloud_key_for_local_api_base(monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "cloud-key")
+    monkeypatch.setenv("VECTOR_API_BASE", "http://host.docker.internal:11434/api")
+    config = VectorSearchConfig(api_key=SecretStr(""))
+    assert config.api_key.get_secret_value() == ""
+
+
+def test_vector_search_inherits_cloud_key_for_remote_api_base(monkeypatch):
+    monkeypatch.setenv("LLM_API_KEY", "cloud-key")
+    monkeypatch.delenv("VECTOR_API_KEY", raising=False)
+    monkeypatch.setenv("VECTOR_API_BASE", "https://api.openai.com/v1")
+    config = VectorSearchConfig(api_key=SecretStr(""))
+    assert config.api_key.get_secret_value() == "cloud-key"
+
+
+def test_vector_search_does_not_align_to_llm_base_url_by_default(monkeypatch):
+    monkeypatch.delenv("VECTOR_API_BASE", raising=False)
+    monkeypatch.delenv("VECTOR_ALIGN_WITH_LLM_BASE_URL", raising=False)
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com/v1")
+    monkeypatch.setenv("OPS_AGENT_DOCKER_RUNTIME", "true")
+    config = VectorSearchConfig()
+    # Default api_base (cloud URL) is not rewritten without explicit VECTOR_API_BASE
+    assert config.api_base == "https://api.openai.com/v1"
+
+
+def test_vector_search_aligns_to_llm_base_url_when_enabled(monkeypatch):
+    monkeypatch.delenv("VECTOR_API_BASE", raising=False)
+    monkeypatch.setenv("VECTOR_ALIGN_WITH_LLM_BASE_URL", "true")
+    monkeypatch.setenv("LLM_BASE_URL", "https://custom-llm-provider.com")
+    monkeypatch.delenv("OPS_AGENT_DOCKER_RUNTIME", raising=False)
+    config = VectorSearchConfig(api_base="http://localhost:11434/api")
+    assert config.api_base == "https://custom-llm-provider.com/api"
+
+
+def test_vector_search_align_recomputes_cloud_key_when_base_becomes_remote(monkeypatch):
+    monkeypatch.delenv("VECTOR_API_BASE", raising=False)
+    monkeypatch.delenv("VECTOR_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_API_KEY", "cloud-key")
+    monkeypatch.setenv("VECTOR_ALIGN_WITH_LLM_BASE_URL", "true")
+    monkeypatch.setenv("LLM_BASE_URL", "https://custom-llm-provider.com")
+    monkeypatch.delenv("OPS_AGENT_DOCKER_RUNTIME", raising=False)
+
+    config = VectorSearchConfig(api_base="http://localhost:11434/api", api_key=SecretStr(""))
+
+    assert config.api_base == "https://custom-llm-provider.com/api"
+    assert config.api_key.get_secret_value() == "cloud-key"
 
 
 def test_observability_config_defaults():
@@ -163,22 +211,19 @@ def test_settings_composition():
     assert settings.features.enable_llm_reasoning is True
 
 
-def test_llm_config_requires_ollama_provider(monkeypatch):
-    monkeypatch.setenv("OLLAMA_API_KEY", "ollama-key")
-    with pytest.raises(ValueError, match="LLM_PROVIDER must be an Ollama model"):
-        LLMConfig(provider="anthropic/claude-3-5-sonnet", base_url="https://ollama.com")
+def test_llm_config_rejects_invalid_provider_format():
+    with pytest.raises(ValueError, match="provider/model"):
+        LLMConfig(provider="gpt-5-mini", base_url="https://api.openai.com/v1")
 
 
-def test_llm_config_rejects_localhost_llm_base_url():
-    with pytest.raises(ValueError, match="cannot be localhost"):
-        LLMConfig(provider="ollama/gpt-oss:20b", base_url="http://localhost:11434")
+def test_llm_config_accepts_openai_provider(monkeypatch):
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    config = LLMConfig(provider="openai/gpt-5-mini", base_url="https://api.openai.com/v1")
+    assert config.base_url == "https://api.openai.com/v1"
+    assert config.api_key.get_secret_value() == ""
 
 
-def test_llm_config_uses_ollama_api_key(monkeypatch):
-    monkeypatch.setenv("OLLAMA_API_KEY", "ollama-key")
-    config = LLMConfig(
-        provider="ollama/gpt-oss:20b",
-        base_url="https://ollama.com",
-        api_key=SecretStr(""),
-    )
-    assert config.api_key.get_secret_value() == "ollama-key"
+def test_llm_config_adapts_localhost_base_url_in_container(monkeypatch):
+    monkeypatch.setenv("OPS_AGENT_DOCKER_RUNTIME", "true")
+    config = LLMConfig(provider="openai/gpt-5-mini", base_url="http://localhost:11434")
+    assert config.base_url == "http://host.docker.internal:11434"

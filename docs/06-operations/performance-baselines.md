@@ -77,7 +77,7 @@ WHERE trm.transaction_id = $1;
 |------|----------|--------|---------------|
 | With vector search (pgvector) | < 100ms | < 200ms | 500ms |
 | Stub/disabled mode | < 5ms | < 10ms | 20ms |
-| Embedding generation (Ollama) | < 500ms | < 1000ms | 2000ms |
+| Embedding generation (OpenAI) | < 300ms | < 600ms | 1500ms |
 
 **Total**: < 150ms (P95) with vector search, < 10ms (P95) stub
 
@@ -103,7 +103,7 @@ LIMIT 20;
 **Configuration**:
 ```bash
 VECTOR_ENABLED=true
-VECTOR_MODEL_NAME=mxbai-embed-large
+VECTOR_MODEL_NAME=text-embedding-3-large
 VECTOR_DIMENSION=1024
 VECTOR_SEARCH_LIMIT=20
 VECTOR_TIME_WINDOW_DAYS=90
@@ -118,11 +118,10 @@ VECTOR_MIN_SIMILARITY=0.3
 
 | Provider | Baseline | Target | Max Threshold |
 |----------|----------|--------|---------------|
-| Ollama Cloud (`gpt-oss:20b`) | < 20s | < 40s | 60s |
-| Ollama local (fallback environment only) | < 30s | < 60s | 90s |
+| OpenAI (`gpt-5-mini`) | < 2s | < 5s | 30s |
 | Rule-sequence fallback | < 50ms | < 100ms | 200ms |
 
-**Total**: < 40s (P95) with Ollama Cloud, < 60s (P95) with local fallback environment
+**Total**: < 5s (P95) with OpenAI
 
 **Optimization Notes**:
 - Retry logic: bounded retries via `LLM_MAX_RETRIES` (default 1)
@@ -138,10 +137,10 @@ VECTOR_MIN_SIMILARITY=0.3
 
 **Configuration**:
 ```bash
-LLM_PROVIDER=ollama/gpt-oss:20b
+LLM_PROVIDER=openai/gpt-5-mini
 LLM_TIMEOUT=30
 LLM_MAX_RETRIES=1
-LLM_BASE_URL=https://ollama.com
+LLM_BASE_URL=https://api.openai.com/v1
 LLM_MAX_PROMPT_TOKENS=4000
 ```
 
@@ -280,14 +279,13 @@ pool_recycle = 1800     # Recycle connections after 30 minutes
 | Mode | Baseline (P95) | Target | Max Threshold |
 |------|---------------|--------|---------------|
 | Fallback path | < 300ms | < 500ms | 2s |
-| LLM (Ollama) | < 60s | < 90s | 120s |
-| LLM (Cloud) | < 40s | < 60s | 90s |
+| LLM (OpenAI) | < 5s | < 10s | 30s |
 
 **Breakdown**:
 - Context build: ~50ms
 - Pattern analysis: ~35ms
 - Similarity search: ~150ms (with vector) or ~10ms (stub)
-- LLM reasoning: ~30s (Ollama) or ~20s (cloud) or ~100ms (fallback path)
+- LLM reasoning: ~3s (OpenAI) or ~100ms (fallback path)
 - Recommendation generation: ~70ms
 - Persistence: ~60ms
 

@@ -20,6 +20,7 @@ class TestInvestigationState:
         assert state["context"] == {}
         assert state["pattern_results"] == {}
         assert state["similarity_results"] == {}
+        assert state["link_analysis_results"] == {}
         assert state["completed_steps"] == []
         assert state["planner_decisions"] == []
         assert state["tool_executions"] == []
@@ -51,6 +52,7 @@ class TestInvestigationState:
             "context",
             "pattern_results",
             "similarity_results",
+            "link_analysis_results",
             "hypotheses",
             "evidence",
             "reasoning",

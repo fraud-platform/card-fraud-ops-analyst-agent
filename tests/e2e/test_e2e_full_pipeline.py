@@ -7,7 +7,7 @@ Usage:
 Requires:
     - Ops Analyst Agent server running (http://localhost:8003)
     - Transaction Management server running (http://localhost:8002)
-    - Ollama running (http://localhost:11434)
+    - OpenAI API configured (LLM_API_KEY)
     - E2E_TRANSACTION_ID set to a valid transaction UUID
 """
 
@@ -63,15 +63,6 @@ def test_e2e_full_pipeline(
     tx_mgmt_client: httpx.Client,
 ):
     """Run full E2E pipeline with request/response logging."""
-
-    # Pre-flight: Check Ollama
-    try:
-        r = http_client.get("http://localhost:11434/api/tags")
-        r.raise_for_status()
-        models = r.json().get("models", [])
-        print(f"\n[OLLAMA] Reachable — {len(models)} model(s)")
-    except Exception as e:
-        print(f"\n[OLLAMA] UNREACHABLE: {e}")
 
     # Pre-flight: Check server health
     r = http_client.get(f"{BASE_URL}/api/v1/health")

@@ -5,8 +5,9 @@ This module contains ZERO database access. Pure functions operating on in-memory
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from typing import Any
+
+from app.utils.type_utils import to_float
 
 
 @dataclass(frozen=True)
@@ -69,11 +70,11 @@ def evaluate_similarity(
     freshness = freshness_weight(tx_timestamp)
 
     if hasattr(transaction, "amount"):
-        amount = _to_float(transaction.amount)
+        amount = to_float(transaction.amount)
         merchant_id = transaction.merchant_id
         card_id = transaction.card_id
     else:
-        amount = _to_float(transaction.get("amount", 0)) if isinstance(transaction, dict) else 0.0
+        amount = to_float(transaction.get("amount", 0)) if isinstance(transaction, dict) else 0.0
         merchant_id = transaction.get("merchant_id") if isinstance(transaction, dict) else None
         card_id = transaction.get("card_id") if isinstance(transaction, dict) else None
 
@@ -91,7 +92,7 @@ def evaluate_similarity(
             score = 0.0
             computed_details: dict[str, Any] = {}
 
-            sim_amount = _to_float(sim_tx.get("amount", 0))
+            sim_amount = to_float(sim_tx.get("amount", 0))
             if amount > 0 and sim_amount > 0:
                 amount_ratio = min(amount, sim_amount) / max(amount, sim_amount)
                 if amount_ratio > 0.8:
@@ -144,19 +145,6 @@ def evaluate_similarity(
         overall_score=overall,
         counter_evidence=all_counter_evidence if all_counter_evidence else None,
     )
-
-
-def _to_float(value: Any) -> float:
-    if isinstance(value, float):
-        return value
-    if isinstance(value, int):
-        return float(value)
-    if isinstance(value, Decimal):
-        return float(value)
-    try:
-        return float(value)
-    except TypeError, ValueError:
-        return 0.0
 
 
 def _risk_multiplier(

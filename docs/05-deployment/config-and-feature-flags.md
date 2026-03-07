@@ -27,20 +27,20 @@ All flags use the `OPS_AGENT_` prefix and map to `FeatureFlagsConfig` in `app/co
 
 ## LLM Configuration
 
-All LLM variables use the `LLM_` prefix and map to `LLMConfig` in `app/core/config.py`. The `LLM_PROVIDER` field uses the Ollama provider prefix format (`ollama/...` or `ollama_chat/...`) and is the single source for model selection.
+All LLM variables use the `LLM_` prefix and map to `LLMConfig` in `app/core/config.py`. `LLM_PROVIDER` uses `provider/model` format and is the single source for model selection.
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `LLM_PROVIDER` | string | `ollama/gpt-oss:20b` | Ollama model string, e.g. `ollama/gpt-oss:20b` |
-| `LLM_BASE_URL` | string | `https://ollama.com` | Ollama Cloud API base URL (localhost is rejected for planner/reasoning) |
-| `LLM_API_KEY` | SecretStr | — | Ollama Cloud API key (falls back to `OLLAMA_API_KEY` when unset) |
+| `LLM_PROVIDER` | string | `openai/gpt-5-mini` | Model string in `provider/model` format, e.g. `openai/gpt-5-mini` |
+| `LLM_BASE_URL` | string | `https://api.openai.com/v1` | API endpoint base URL |
+| `LLM_API_KEY` | SecretStr | — | OpenAI API key (required) |
 | `LLM_TIMEOUT` | int | `30` | Request timeout in seconds |
 | `LLM_MAX_RETRIES` | int | `1` | Maximum retry attempts on transient failures |
-| `LLM_STAGE_TIMEOUT_SECONDS` | int | `20` | Hard timeout budget for the full reasoning stage |
+| `LLM_STAGE_TIMEOUT_SECONDS` | int | `30` | Hard timeout budget for the full reasoning stage |
 | `LLM_CONSISTENCY_THRESHOLD` | float | `0.7` | Minimum agreement threshold for consistency checks |
 | `LLM_PROMPT_GUARD_ENABLED` | bool | `true` | Enable prompt injection and PII guard |
 | `LLM_MAX_PROMPT_TOKENS` | int | `4000` | Maximum tokens allowed in a single prompt |
-| `LLM_MAX_COMPLETION_TOKENS` | int | `384` | Cap generated output tokens to keep latency bounded |
+| `LLM_MAX_COMPLETION_TOKENS` | int | `512` | Cap generated output tokens to keep latency bounded |
 
 ### Prompt Guard Security
 
@@ -54,7 +54,7 @@ When `LLM_PROMPT_GUARD_ENABLED=true` (default), the following protections are ap
 
 2. **Payload Size Limits**: Enforces maximum string length (50,000 chars) and JSON depth (10 levels)
 
-3. **Validation on Block**: If injection patterns are detected, the LLM call is blocked and fallback reasoning is used
+3. **Validation on Block**: If injection patterns are detected, the LLM call fails fast; the investigation is marked failed.
 
 ### LLM Output Validation
 
@@ -66,13 +66,20 @@ All LLM responses are validated and sanitized before use:
 4. **Sensitive Key Removal**: Any `system`, `instruction`, `password`, `secret`, or `token` keys are stripped
 5. **Length Limits**: Narratives truncated to 2,000 chars, findings to 20 items, hypotheses to 10 items
 
-### LLM Provider Example (Ollama Cloud)
+### Structured Output
+
+Planner and reasoning LLM calls use OpenAI JSON output mode (`response_format: {type: json_object}`):
+
+- Planner: strict JSON object with keys `tool`, `reason`, and `confidence`.
+- Reasoning: strict JSON object that includes narrative, risk level, hypotheses, known facts, unknowns, and citations.
+
+### LLM Provider Example (OpenAI)
 
 Set these via Doppler, not directly in environment:
 ```bash
-doppler secrets set LLM_PROVIDER=ollama/gpt-oss:20b
-doppler secrets set LLM_BASE_URL=https://ollama.com
-doppler secrets set LLM_API_KEY=<ollama-cloud-api-key>
+doppler secrets set LLM_PROVIDER=openai/gpt-5-mini
+doppler secrets set LLM_BASE_URL=https://api.openai.com/v1
+doppler secrets set LLM_API_KEY=<openai-api-key>
 ```
 
 ## Core Application Config
@@ -97,8 +104,8 @@ Vector search variables use the `VECTOR_` prefix and map to `VectorSearchConfig`
 |----------|------|---------|-------------|
 | `VECTOR_ENABLED` | bool | `true` | Enable vector embeddings + pgvector similarity path |
 | `VECTOR_MODEL_NAME` | string | `mxbai-embed-large` | Embedding model name |
-| `VECTOR_API_BASE` | string | `http://localhost:11434/api` | Embedding endpoint base (e.g. `http://localhost:11434/api`) |
-| `VECTOR_API_KEY` | SecretStr | — | Optional API key (falls back to `OLLAMA_API_KEY`) |
+| `VECTOR_API_BASE` | string | `https://api.openai.com/v1` | Embedding endpoint base |
+| `VECTOR_API_KEY` | SecretStr | — | Optional; inherits `LLM_API_KEY` automatically for non-local endpoints |
 | `VECTOR_DIMENSION` | int | `1024` | Expected embedding vector size |
 | `VECTOR_SEARCH_LIMIT` | int | `20` | Maximum candidate matches to scan |
 | `VECTOR_TIME_WINDOW_DAYS` | int | `90` | Search horizon for candidate transactions |
@@ -107,18 +114,12 @@ Vector search variables use the `VECTOR_` prefix and map to `VectorSearchConfig`
 | `VECTOR_RETRY_ATTEMPTS` | int | `3` | Retry count for vector DB search query |
 | `VECTOR_RETRY_BACKOFF_SECONDS` | float | `0.25` | Base exponential backoff for retries |
 
-### Recommended Demo Topology (Split Mode)
+### Recommended Demo Topology
 
-- Reasoning: cloud (`LLM_BASE_URL=https://ollama.com`)
-- Embeddings: local (`VECTOR_API_BASE=http://localhost:11434/api`)
+All reasoning and embeddings use OpenAI APIs — no local infrastructure required for LLM:
 
-This configuration avoids cloud embedding availability issues while preserving cloud reasoning quality.
-
-Container runtime behavior:
-- When `VECTOR_API_BASE` is not set and the default `http://localhost:11434/api` is in effect,
-  the service rewrites to `http://host.docker.internal:11434/api` inside Docker containers.
-- If your Docker runtime does not support `host.docker.internal`, set `VECTOR_API_BASE`
-  explicitly to a reachable embedding endpoint.
+- Reasoning: `LLM_BASE_URL=https://api.openai.com/v1`
+- Embeddings: `VECTOR_API_BASE=https://api.openai.com/v1`
 
 ### Fail-Closed Behavior
 
@@ -263,9 +264,9 @@ Multiple layers enforce size limits to prevent resource exhaustion and ensure sy
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `LLM_MAX_PROMPT_TOKENS` | 4000 | Maximum tokens sent to LLM per request |
-| `LLM_TIMEOUT` | 30 seconds | Maximum wait time for LLM response |
+| `LLM_TIMEOUT` | 60 seconds | Maximum wait time for LLM response |
 | `LLM_MAX_RETRIES` | 1 | Retry attempts on transient failures |
-| `LLM_STAGE_TIMEOUT_SECONDS` | 20 seconds | Hard stage budget |
+| `LLM_STAGE_TIMEOUT_SECONDS` | 60 seconds | Hard stage budget |
 | `LLM_MAX_COMPLETION_TOKENS` | 384 | Output token cap for response latency control |
 
 ### Payload Size Guidelines

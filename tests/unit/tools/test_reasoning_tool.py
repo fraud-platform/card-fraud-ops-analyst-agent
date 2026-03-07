@@ -72,25 +72,19 @@ class TestReasoningTool:
 
     @pytest.mark.asyncio
     async def test_execute_handles_llm_error_with_evidence_fallback(self, state_with_analysis):
-        """LLM runtime errors keep risk assessment meaningful via evidence fallback."""
+        """LLM runtime errors should fail fast (no evidence fallback)."""
         mock_llm = AsyncMock()
         mock_llm.ainvoke.side_effect = Exception("LLM timeout")
         tool = ReasoningTool(llm=mock_llm)
 
-        result = await tool.execute(state_with_analysis)
-
-        reasoning = result["reasoning"]
-        assert reasoning["llm_status"] == "error"
-        assert reasoning["risk_level"] in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
-        assert str(reasoning["summary"]).startswith("Evidence fallback")
-        assert float(reasoning["confidence"]) > 0.0
-        assert "error_detail" in reasoning
+        with pytest.raises(Exception, match="LLM timeout"):
+            await tool.execute(state_with_analysis)
 
     @pytest.mark.asyncio
     async def test_execute_handles_llm_stage_timeout_with_evidence_fallback(
         self, state_with_analysis
     ):
-        """Slow LLM responses should degrade gracefully without failing the tool execution."""
+        """Slow LLM responses should fail fast when stage timeout is exceeded."""
         mock_llm = AsyncMock()
 
         async def _slow_response(*args, **kwargs):
@@ -114,30 +108,39 @@ class TestReasoningTool:
         )
         tool = ReasoningTool(llm=mock_llm, settings=settings)
 
-        result = await tool.execute(state_with_analysis)
+        with pytest.raises(TimeoutError):
+            await tool.execute(state_with_analysis)
 
-        reasoning = result["reasoning"]
-        assert reasoning["llm_status"] == "timeout"
-        assert reasoning["risk_level"] in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
-        assert str(reasoning["summary"]).startswith("Evidence fallback")
-        assert "error_detail" in reasoning
+    @pytest.mark.asyncio
+    async def test_execute_skips_llm_when_reasoning_feature_disabled(self, state_with_analysis):
+        """Feature flag should disable reasoning LLM calls and fail fast."""
+        mock_llm = AsyncMock()
+        settings = SimpleNamespace(
+            features=SimpleNamespace(enable_llm_reasoning=False),
+            llm=SimpleNamespace(
+                prompt_guard_enabled=False,
+                max_completion_tokens=384,
+                stage_timeout_seconds=20,
+            ),
+        )
+        tool = ReasoningTool(llm=mock_llm, settings=settings)
+
+        with pytest.raises(RuntimeError, match="LLM reasoning disabled"):
+            await tool.execute(state_with_analysis)
+
+        mock_llm.ainvoke.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_execute_handles_parse_error_with_evidence_fallback(self, state_with_analysis):
-        """Invalid JSON output should also use evidence fallback risk assessment."""
+        """Invalid JSON output should fail fast (no evidence fallback)."""
         from langchain_core.messages import AIMessage
 
         mock_llm = AsyncMock()
         mock_llm.ainvoke.return_value = AIMessage(content="not valid json")
         tool = ReasoningTool(llm=mock_llm)
 
-        result = await tool.execute(state_with_analysis)
-
-        reasoning = result["reasoning"]
-        assert reasoning["llm_status"] == "parse_error"
-        assert reasoning["risk_level"] in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
-        assert str(reasoning["summary"]).startswith("Evidence fallback")
-        assert float(reasoning["confidence"]) > 0.0
+        with pytest.raises(ValueError):
+            await tool.execute(state_with_analysis)
 
     @pytest.mark.asyncio
     async def test_execute_calibrates_medium_risk_down_for_strong_counter_evidence(
@@ -193,7 +196,7 @@ class TestReasoningTool:
 
     @pytest.mark.asyncio
     async def test_execute_marks_partial_parse_status(self, state_with_analysis):
-        """Truncated-but-salvageable JSON should be tracked as partial_parse, not parse_error."""
+        """Truncated JSON should fail fast with strict parsing."""
         from langchain_core.messages import AIMessage
 
         mock_llm = AsyncMock()
@@ -202,11 +205,8 @@ class TestReasoningTool:
         )
         tool = ReasoningTool(llm=mock_llm)
 
-        result = await tool.execute(state_with_analysis)
-
-        reasoning = result["reasoning"]
-        assert reasoning["llm_status"] == "partial_parse"
-        assert reasoning["risk_level"] == "LOW"
+        with pytest.raises(ValueError):
+            await tool.execute(state_with_analysis)
 
     @pytest.mark.asyncio
     async def test_execute_caps_medium_with_strong_counter_evidence_and_moderate_similarity(

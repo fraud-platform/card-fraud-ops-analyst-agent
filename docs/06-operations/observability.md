@@ -209,7 +209,7 @@ The trace includes additional context attributes:
 
 1. **Incoming request** to Ops Agent includes `X-Request-ID` header
 2. Ops Agent **stores** it in contextvar
-3. **Outbound calls** to Rule Management, Ollama, Embedding service include same `X-Request-ID`
+3. **Outbound calls** to Rule Management, OpenAI LLM, and OpenAI Embeddings include same `X-Request-ID`
 4. All logs across services share the same `request_id`
 
 **Request Flow Example:**
@@ -219,8 +219,8 @@ Portal (X-Request-ID: abc-123)
   -> Ops Agent (X-Request-ID: abc-123)
      -> logs: {"request_id": "abc-123", ...}
      -> Rule Management (X-Request-ID: abc-123)
-     -> Ollama LLM (X-Request-ID: abc-123)
-     -> Ollama Embeddings (X-Request-ID: abc-123)
+     -> OpenAI LLM (X-Request-ID: abc-123)
+     -> OpenAI Embeddings (X-Request-ID: abc-123)
 ```
 
 **Checking Request ID Propagation:**
@@ -478,7 +478,7 @@ groups:
 - [ ] Verify OTLP endpoint: `doppler secrets get OTEL_OTLP_ENDPOINT`
 - [ ] Check feature flags: `doppler secrets | grep OPS_AGENT_ENABLE`
 - [ ] Check database connectivity: `psql $DATABASE_URL_APP -c "SELECT 1"`
-- [ ] Check LLM provider: `curl -H "Authorization: Bearer $LLM_API_KEY" "$LLM_BASE_URL/api/tags"`
+- [ ] Check LLM provider: `curl -H "Authorization: Bearer $LLM_API_KEY" "$LLM_BASE_URL/models"`
 
 ---
 

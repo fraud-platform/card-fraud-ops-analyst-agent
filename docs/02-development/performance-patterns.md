@@ -260,7 +260,7 @@ def get_chat_model(settings: Settings) -> BaseChatModel:
     ...
 ```
 
-**OllamaProvider (explicit timeout):**
+**LLMChatProvider (OpenAI `/chat/completions`):**
 
 ```python
 async def complete(self, messages: list[dict[str, str]], **kwargs):

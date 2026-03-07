@@ -7,13 +7,13 @@ from app.core.config import Settings, VectorSearchConfig
 from app.core.tracing import clear_tracing_context, set_request_id, set_trace_parent
 
 
-def _make_settings(enabled: bool = True, api_base: str = "http://localhost:11434/api") -> Settings:
+def _make_settings(enabled: bool = True, api_base: str = "https://api.openai.com/v1") -> Settings:
     """Create a settings object with vector search configured."""
     settings = Settings()
     settings.vector_search = VectorSearchConfig(
         enabled=enabled,
         api_base=api_base,
-        model_name="mxbai-embed-large",
+        model_name="text-embedding-3-large",
         dimension=1024,
     )
     return settings
@@ -33,9 +33,9 @@ class TestEmbeddingClient:
             await client.embed("test text")
 
     @pytest.mark.asyncio
-    async def test_embed_calls_ollama_embed_endpoint(self, monkeypatch: pytest.MonkeyPatch):
-        """Verifies /api/embed path and 'input' body key (Ollama native format)."""
-        settings = _make_settings(api_base="http://localhost:11434/api")
+    async def test_embed_calls_openai_embeddings_endpoint(self, monkeypatch: pytest.MonkeyPatch):
+        """Verifies /embeddings path, 'input' and 'dimensions' body keys (OpenAI format)."""
+        settings = _make_settings(api_base="https://api.openai.com/v1")
         client = EmbeddingClient(settings)
 
         captured_url = {}
@@ -46,8 +46,8 @@ class TestEmbeddingClient:
                 return None
 
             def json(self):
-                # Ollama /api/embed returns {"embeddings": [[...], ...]}
-                return {"embeddings": [[0.1] * 1024]}
+                # OpenAI /embeddings returns {"data": [{"embedding": [...]}]}
+                return {"data": [{"embedding": [0.1] * 1024}], "model": "text-embedding-3-large"}
 
         async def _fake_post(self, url, json, headers=None):
             captured_url["url"] = url
@@ -57,12 +57,13 @@ class TestEmbeddingClient:
         monkeypatch.setattr("httpx.AsyncClient.post", _fake_post)
 
         result = await client.embed("amount=100\ncurrency=USD")
-        assert captured_url["url"] == "http://localhost:11434/api/embed"
-        assert captured_body["body"]["model"] == "mxbai-embed-large"
+        assert captured_url["url"] == "https://api.openai.com/v1/embeddings"
+        assert captured_body["body"]["model"] == "text-embedding-3-large"
         assert captured_body["body"]["input"] == "amount=100\ncurrency=USD"
+        assert captured_body["body"]["dimensions"] == 1024
         assert isinstance(result, EmbeddingResponse)
         assert len(result.embedding) == 1024
-        assert result.model == "mxbai-embed-large"
+        assert result.model == "text-embedding-3-large"
 
     @pytest.mark.asyncio
     async def test_embed_validates_embeddings_is_list(self, monkeypatch: pytest.MonkeyPatch):
@@ -74,7 +75,7 @@ class TestEmbeddingClient:
                 return None
 
             def json(self):
-                return {"embeddings": None}
+                return {"data": None}
 
         async def _fake_post(self, url, json, headers=None):
             return _BadResponse()
@@ -94,7 +95,7 @@ class TestEmbeddingClient:
                 return None
 
             def json(self):
-                return {"embeddings": []}
+                return {"data": []}
 
         async def _fake_post(self, url, json, headers=None):
             return _EmptyResponse()
@@ -115,7 +116,7 @@ class TestEmbeddingClient:
                 return None
 
             def json(self):
-                return {"embeddings": [[]]}
+                return {"data": [{"embedding": []}]}
 
         async def _fake_post(self, url, json, headers=None):
             return _EmptyInnerResponse()
@@ -140,7 +141,7 @@ class TestEmbeddingClient:
                 return None
 
             def json(self):
-                return {"embeddings": [[0.5] * 1024]}
+                return {"data": [{"embedding": [0.5] * 1024}]}
 
         async def _fake_post(self, url, json, headers=None):
             captured_headers["headers"] = headers
@@ -163,7 +164,7 @@ class TestEmbeddingClient:
                 return None
 
             def json(self):
-                return {"embeddings": [[0.5] * 1024]}
+                return {"data": [{"embedding": [0.5] * 1024}]}
 
         async def _fake_post(self, url, json, headers=None):
             captured_headers["headers"] = headers
@@ -193,7 +194,7 @@ class TestEmbeddingClient:
                 return None
 
             def json(self):
-                return {"embeddings": [[1, 2, 3]]}
+                return {"data": [{"embedding": [1, 2, 3]}]}
 
         async def _fake_post(self, url, json, headers=None):
             return _IntResponse()
@@ -213,7 +214,7 @@ class TestEmbeddingClient:
                 return None
 
             def json(self):
-                return {"embeddings": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]}
+                return {"data": [{"embedding": [0.1, 0.2, 0.3]}, {"embedding": [0.4, 0.5, 0.6]}]}
 
         async def _fake_post(self, url, json, headers=None):
             return _BatchResponse()

@@ -9,6 +9,10 @@ from app.tools._core.context_logic import (
     compute_window_stats,
     extract_signals,
 )
+from app.tools._core.link_analysis_logic import (
+    augment_link_analysis_with_neighborhoods,
+    run_link_analysis,
+)
 from app.tools._core.pattern_logic import (
     PatternScore,
     compute_severity,
@@ -49,6 +53,8 @@ __all__ = [
     "compute_all_windows",
     "extract_signals",
     "assemble_context",
+    "run_link_analysis",
+    "augment_link_analysis_with_neighborhoods",
     "PatternScore",
     "score_amount_anomalies",
     "score_time_anomalies",

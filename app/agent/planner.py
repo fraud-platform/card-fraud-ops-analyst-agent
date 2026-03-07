@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -50,6 +50,7 @@ Step Count: {step_count} / {max_steps}
 - Context Available: {has_context}
 - Pattern Analysis Done: {has_patterns}
 - Similarity Analysis Done: {has_similarity}
+- Link Analysis Done: {has_link_analysis}
 - Reasoning Done: {has_reasoning}
 - Recommendations Generated: {has_recommendations}
 - Rule Draft Generated: {has_rule_draft}
@@ -62,7 +63,7 @@ Step Count: {step_count} / {max_steps}
 
 ## Rules
 1. ALWAYS retrieve context first if not yet available.
-2. Run analysis tools (pattern_tool, similarity_tool) BEFORE reasoning_tool.
+2. Run analysis tools (pattern_tool, similarity_tool, link_analysis_tool) BEFORE reasoning_tool.
 3. Run reasoning_tool BEFORE recommendation_tool.
 4. Run recommendation_tool BEFORE rule_draft_tool.
 5. NEVER repeat a tool that is already in completed_steps.
@@ -72,6 +73,18 @@ Step Count: {step_count} / {max_steps}
 ## Decision
 Select the next tool to execute, or COMPLETE if the investigation is sufficient.
 """
+
+PLANNER_MAX_DECISION_REPAIRS = 2
+
+PLANNER_RESPONSE_FORMAT = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string"},
+        "reason": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+    },
+    "required": ["tool", "reason", "confidence"],
+}
 
 
 async def planner_node(
@@ -109,11 +122,13 @@ async def planner_node(
             reason = "Context is required before any analysis"
             confidence = 0.99
         elif not planner_llm_enabled:
-            tool_name, _, confidence = _rule_sequence_next_tool(state, registry)
-            reason = "rule-sequence fallback: planner LLM disabled"
+            tool_name, reason, confidence = _rule_sequence_next_tool(state, registry)
         elif planner_circuit_open:
-            tool_name, _, confidence = _rule_sequence_next_tool(state, registry)
-            reason = "rule-sequence fallback: planner circuit open after prior LLM failure"
+            logger.warning(
+                "Planner circuit open — falling back to rule-sequence",
+                investigation_id=state["investigation_id"],
+            )
+            tool_name, reason, confidence = _rule_sequence_next_tool(state, registry)
         else:
             try:
                 (
@@ -124,31 +139,18 @@ async def planner_node(
                     llm_response_preview,
                 ) = await _llm_planning(state, llm, registry)
             except PlannerError as exc:
-                tool_name, reason, confidence = _rule_sequence_next_tool(state, registry)
                 logger.warning(
-                    "Planner LLM failed; using rule-sequence fallback",
+                    "Planner LLM failed — falling back to rule-sequence",
                     investigation_id=state["investigation_id"],
                     llm_error=str(exc),
-                    fallback_tool=tool_name,
                 )
+                tool_name, reason, confidence = _rule_sequence_next_tool(state, registry)
 
         if tool_name not in valid_tools:
             raise PlannerError(
                 f"Planner selected invalid tool '{tool_name}'. Valid tools: {valid_tools}",
                 investigation_id=state["investigation_id"],
                 tool_name=tool_name,
-            )
-
-        if tool_name in state["completed_steps"]:
-            # LLM hallucinated a repeated tool — fall back to canonical sequence.
-            prev_tool = tool_name
-            tool_name, _, confidence = _rule_sequence_next_tool(state, registry)
-            reason = "rule-sequence fallback: planner selected completed tool"
-            logger.warning(
-                "Planner selected already-completed tool; using rule-sequence fallback",
-                investigation_id=state["investigation_id"],
-                llm_tool=prev_tool,
-                fallback_tool=tool_name,
             )
 
         decision: PlannerDecision = {
@@ -203,6 +205,7 @@ async def _llm_planning(
         has_context=bool(state.get("context")),
         has_patterns=bool(state.get("pattern_results")),
         has_similarity=bool(state.get("similarity_results")),
+        has_link_analysis=bool(state.get("link_analysis_results")),
         has_reasoning=bool(state.get("reasoning")),
         has_recommendations=bool(state.get("recommendations")),
         has_rule_draft=state.get("rule_draft") is not None,
@@ -228,76 +231,253 @@ async def _llm_planning(
     )
 
     settings = get_settings()
-    start_time = time.perf_counter()
-    status = "success"
-    try:
-        async with asyncio.timeout(settings.langgraph.planner_timeout_seconds):
-            response = await llm.ainvoke(messages)
-    except TimeoutError as exc:
-        status = "timeout"
+    available_tools = set(registry.tool_names)
+    response_messages: list[HumanMessage | SystemMessage] = list(messages)
+
+    for repair_attempt in range(PLANNER_MAX_DECISION_REPAIRS + 1):
+        start_time = time.perf_counter()
+        status = "success" if repair_attempt == 0 else "repair_success"
+        try:
+            async with asyncio.timeout(settings.langgraph.planner_timeout_seconds):
+                response = await llm.ainvoke(
+                    response_messages,
+                    max_tokens=settings.planner.max_tokens,
+                    request_timeout=float(settings.langgraph.planner_timeout_seconds + 5),
+                    response_format=PLANNER_RESPONSE_FORMAT,
+                )
+        except TimeoutError as exc:
+            status = "timeout" if repair_attempt == 0 else "repair_timeout"
+            ops_agent_llm_calls_total.labels(purpose="planner", status=status).inc()
+            raise PlannerError(
+                f"LLM planning timeout after {settings.langgraph.planner_timeout_seconds}s",
+                investigation_id=state["investigation_id"],
+            ) from exc
+        except Exception as exc:
+            status = "error" if repair_attempt == 0 else "repair_error"
+            ops_agent_llm_calls_total.labels(purpose="planner", status=status).inc()
+            raise PlannerError(
+                f"LLM planning failed: {exc}",
+                investigation_id=state["investigation_id"],
+            ) from exc
+        finally:
+            elapsed = time.perf_counter() - start_time
+            ops_agent_llm_latency_seconds.labels(purpose="planner").observe(elapsed)
+
         ops_agent_llm_calls_total.labels(purpose="planner", status=status).inc()
-        raise PlannerError(
-            f"LLM planning timeout after {settings.langgraph.planner_timeout_seconds}s",
+
+        input_tokens = 0
+        output_tokens = 0
+        if hasattr(response, "usage_metadata") and response.usage_metadata:
+            metadata = response.usage_metadata
+            model_name = getattr(llm, "model", "unknown")
+            if "input_tokens" in metadata:
+                input_tokens = metadata["input_tokens"]
+                ops_agent_llm_tokens_total.labels(model=model_name, type="input").inc(input_tokens)
+            if "output_tokens" in metadata:
+                output_tokens = metadata["output_tokens"]
+                ops_agent_llm_tokens_total.labels(model=model_name, type="output").inc(
+                    output_tokens
+                )
+
+        response_content = str(response.content)
+        current_span.add_event(
+            "llm.response",
+            {
+                "purpose": "planner" if repair_attempt == 0 else "planner_repair",
+                "attempt": repair_attempt + 1,
+                "content_preview": response_content[:2000],
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            },
+        )
+
+        try:
+            parsed = _parse_planner_payload(response.content)
+            tool = str(parsed.get("tool", "")).strip()
+            reason = str(parsed.get("reason", ""))
+            confidence_raw = parsed.get("confidence", 0.5)
+            confidence = max(0.0, min(1.0, float(confidence_raw)))
+            if not tool:
+                raise ValueError("LLM returned empty tool name")
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            parse_status = "parse_error" if repair_attempt == 0 else "repair_parse_error"
+            ops_agent_llm_calls_total.labels(purpose="planner", status=parse_status).inc()
+            raise PlannerError(
+                f"LLM planning failed: failed to parse LLM response: {response_content[:200]}",
+                investigation_id=state["investigation_id"],
+            ) from exc
+
+        rule_violation = _validate_planner_decision(state, tool, available_tools)
+        if not rule_violation:
+            return tool, reason, confidence, user_prompt, response_content
+
+        ops_agent_llm_calls_total.labels(purpose="planner", status="invalid_decision").inc()
+        current_span.add_event(
+            "llm.response_invalid_decision",
+            {
+                "attempt": repair_attempt + 1,
+                "tool": tool,
+                "violation": rule_violation[:240],
+            },
+        )
+        logger.warning(
+            "Planner LLM decision violated sequencing constraints",
             investigation_id=state["investigation_id"],
-        ) from exc
-    except Exception as exc:
-        status = "error"
-        ops_agent_llm_calls_total.labels(purpose="planner", status=status).inc()
-        raise PlannerError(
-            f"LLM planning failed: {exc}",
-            investigation_id=state["investigation_id"],
-        ) from exc
-    finally:
-        elapsed = time.perf_counter() - start_time
-        ops_agent_llm_latency_seconds.labels(purpose="planner").observe(elapsed)
+            selected_tool=tool,
+            violation=rule_violation,
+            attempt=repair_attempt + 1,
+            max_attempts=PLANNER_MAX_DECISION_REPAIRS + 1,
+        )
 
-    ops_agent_llm_calls_total.labels(purpose="planner", status=status).inc()
+        if repair_attempt >= PLANNER_MAX_DECISION_REPAIRS:
+            raise PlannerError(
+                f"LLM planning failed: invalid decision '{tool}' ({rule_violation})",
+                investigation_id=state["investigation_id"],
+                tool_name=tool,
+            )
 
-    input_tokens = 0
-    output_tokens = 0
-    if hasattr(response, "usage_metadata") and response.usage_metadata:
-        metadata = response.usage_metadata
-        model_name = getattr(llm, "model", "unknown")
-        if "input_tokens" in metadata:
-            input_tokens = metadata["input_tokens"]
-            ops_agent_llm_tokens_total.labels(model=model_name, type="input").inc(input_tokens)
-        if "output_tokens" in metadata:
-            output_tokens = metadata["output_tokens"]
-            ops_agent_llm_tokens_total.labels(model=model_name, type="output").inc(output_tokens)
+        response_messages = [
+            *messages,
+            HumanMessage(
+                content=_build_planner_repair_instruction(
+                    violation=rule_violation,
+                    invalid_tool=tool,
+                    response_preview=response_content,
+                    completed_steps=state.get("completed_steps", []),
+                )
+            ),
+        ]
+        ops_agent_llm_calls_total.labels(purpose="planner", status="repair_requested").inc()
 
-    response_content = str(response.content)
-    current_span.add_event(
-        "llm.response",
-        {
-            "purpose": "planner",
-            "content_preview": response_content[:2000],
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-        },
+    raise PlannerError(
+        "LLM planning failed: repair loop exhausted",
+        investigation_id=state["investigation_id"],
     )
 
-    try:
-        parsed = json.loads(response.content)
-        tool = parsed.get("tool", "").strip()
-        reason = parsed.get("reason", "")
-        confidence = float(parsed.get("confidence", 0.5))
-        confidence = max(0.0, min(1.0, confidence))
 
-        if not tool:
-            raise ValueError("LLM returned empty tool name")
+def _validate_planner_decision(
+    state: InvestigationState,
+    tool_name: str,
+    available_tools: set[str],
+) -> str | None:
+    """Validate sequencing constraints for LLM planner choices."""
+    completed = set(state.get("completed_steps", []))
 
-        return tool, reason, confidence, user_prompt, response_content
-    except (json.JSONDecodeError, ValueError, TypeError) as exc:
-        raise PlannerError(
-            f"Failed to parse LLM response: {response.content[:200]}",
-            investigation_id=state["investigation_id"],
-        ) from exc
+    if tool_name in completed:
+        return f"tool '{tool_name}' already completed"
+
+    def _missing(required: str) -> bool:
+        return required in available_tools and required not in completed
+
+    if tool_name == "reasoning_tool":
+        missing_analysis = [
+            required
+            for required in ("pattern_tool", "similarity_tool", "link_analysis_tool")
+            if _missing(required)
+        ]
+        if missing_analysis:
+            return f"reasoning_tool selected before analysis tools: {', '.join(missing_analysis)}"
+
+    if tool_name == "recommendation_tool" and _missing("reasoning_tool"):
+        return "recommendation_tool selected before reasoning_tool"
+
+    if tool_name == "COMPLETE":
+        if _missing("reasoning_tool"):
+            return "COMPLETE selected before reasoning_tool"
+        if _missing("recommendation_tool"):
+            return "COMPLETE selected before recommendation_tool"
+
+    return None
+
+
+def _build_planner_repair_instruction(
+    *,
+    violation: str,
+    invalid_tool: str,
+    response_preview: str,
+    completed_steps: list[str],
+) -> str:
+    completed = ", ".join(completed_steps) if completed_steps else "none"
+    preview = response_preview.strip().replace("\x00", "")
+    if len(preview) > 1200:
+        preview = preview[:1200] + "..."
+    return (
+        "Your previous planner decision violated hard sequencing constraints.\n"
+        f"Violation: {violation}\n"
+        f"Invalid tool: {invalid_tool}\n"
+        f"Completed steps: {completed}\n"
+        "Return only one raw JSON object with keys: tool, reason, confidence.\n"
+        "Do not use markdown or code fences.\n"
+        "Choose a valid next tool based on the completed steps.\n\n"
+        f"Previous response:\n{preview}"
+    )
+
+
+def _strip_markdown_fences(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.removeprefix("```json").removeprefix("```JSON").removeprefix("```")
+        if stripped.endswith("```"):
+            stripped = stripped[:-3]
+    return stripped.strip()
+
+
+def _extract_balanced_json(text: str) -> str | None:
+    start = text.find("{")
+    if start < 0:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            depth += 1
+            continue
+        if char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    return None
+
+
+def _parse_planner_payload(raw_content: Any) -> dict[str, Any]:
+    if isinstance(raw_content, dict):
+        return raw_content
+
+    text = str(raw_content).strip()
+    candidates: list[str] = []
+    for candidate in (text, _strip_markdown_fences(text), _extract_balanced_json(text)):
+        if isinstance(candidate, str):
+            value = candidate.strip()
+            if value and value not in candidates:
+                candidates.append(value)
+
+    for candidate in candidates:
+        parsed = json.loads(candidate)
+        if isinstance(parsed, dict):
+            return parsed
+
+    raise ValueError("Planner response is not a JSON object")
 
 
 _TOOL_SEQUENCE = [
     "context_tool",
     "pattern_tool",
     "similarity_tool",
+    "link_analysis_tool",
     "reasoning_tool",
     "recommendation_tool",
 ]
@@ -360,6 +540,10 @@ def _build_findings_summary(state: InvestigationState) -> str:
     if similarity:
         match_count = len(similarity.get("matches", []))
         parts.append(f"similarity({match_count} matches)")
+    link_analysis = state.get("link_analysis_results", {})
+    if link_analysis:
+        signal_count = len(link_analysis.get("signals", []))
+        parts.append(f"link_analysis({signal_count} signals)")
     if state.get("reasoning"):
         parts.append("reasoning(done)")
     rec_count = len(state.get("recommendations", []))

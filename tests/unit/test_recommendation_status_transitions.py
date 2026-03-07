@@ -29,3 +29,25 @@ async def test_acknowledge_rejects_invalid_transition():
 
     with pytest.raises(ConflictError):
         await service.acknowledge("r1", "u1", "REJECTED")
+
+
+@pytest.mark.asyncio
+async def test_list_worklist_normalizes_legacy_recommendation_types():
+    service = RecommendationService(AsyncMock())
+    service.recommendation_repo.list_open = AsyncMock(
+        return_value=(
+            [
+                {"type": "REVIEW", "status": "OPEN", "title": "A"},
+                {"type": "case_action", "status": "OPEN", "title": "B"},
+                {"type": "RULE_CANDIDATE", "status": "OPEN", "title": "C"},
+            ],
+            "cursor-1",
+        )
+    )
+
+    recommendations, cursor = await service.list_worklist(limit=3)
+
+    assert cursor == "cursor-1"
+    assert recommendations[0]["type"] == "review_priority"
+    assert recommendations[1]["type"] == "case_action"
+    assert recommendations[2]["type"] == "rule_candidate"

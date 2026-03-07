@@ -247,6 +247,79 @@ class TMClient:
         self._set_cached_history(cache_key, result)
         return result
 
+    async def get_ip_neighborhood(
+        self,
+        ip_address: str,
+        *,
+        hours_back: int = 72,
+        from_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get transactions sharing the same IP address within a time window."""
+        cache_key = f"ip:{ip_address}:{hours_back}:{from_date or 'default'}"
+        cached = self._get_cached_history(cache_key)
+        if cached is not None:
+            return cached
+
+        if from_date is None:
+            cutoff = utc_now() - timedelta(hours=hours_back)
+            from_date = cutoff.isoformat()
+
+        result = await self._paginated_list(
+            params={"ip_address": ip_address, "from_date": from_date, "page_size": _PAGE_SIZE},
+        )
+        self._set_cached_history(cache_key, result)
+        return result
+
+    async def get_device_neighborhood(
+        self,
+        device_id: str,
+        *,
+        hours_back: int = 72,
+        from_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get transactions sharing the same device_id within a time window."""
+        cache_key = f"device:{device_id}:{hours_back}:{from_date or 'default'}"
+        cached = self._get_cached_history(cache_key)
+        if cached is not None:
+            return cached
+
+        if from_date is None:
+            cutoff = utc_now() - timedelta(hours=hours_back)
+            from_date = cutoff.isoformat()
+
+        result = await self._paginated_list(
+            params={"device_id": device_id, "from_date": from_date, "page_size": _PAGE_SIZE},
+        )
+        self._set_cached_history(cache_key, result)
+        return result
+
+    async def get_device_fingerprint_neighborhood(
+        self,
+        device_fingerprint_hash: str,
+        *,
+        hours_back: int = 72,
+        from_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get transactions sharing the same device fingerprint hash within a time window."""
+        cache_key = f"fingerprint:{device_fingerprint_hash}:{hours_back}:{from_date or 'default'}"
+        cached = self._get_cached_history(cache_key)
+        if cached is not None:
+            return cached
+
+        if from_date is None:
+            cutoff = utc_now() - timedelta(hours=hours_back)
+            from_date = cutoff.isoformat()
+
+        result = await self._paginated_list(
+            params={
+                "device_fingerprint_hash": device_fingerprint_hash,
+                "from_date": from_date,
+                "page_size": _PAGE_SIZE,
+            },
+        )
+        self._set_cached_history(cache_key, result)
+        return result
+
     async def health_check(self) -> bool:
         """GET /api/v1/health — returns True if TM API is reachable."""
         try:

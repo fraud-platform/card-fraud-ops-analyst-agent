@@ -1,4 +1,6 @@
-"""Unit tests for robust reasoning payload assembly and parsing."""
+"""Unit tests for reasoning payload assembly and strict parsing."""
+
+import pytest
 
 from app.tools._core.reasoning_logic import assemble_prompt_payload, parse_llm_response
 
@@ -20,17 +22,39 @@ def test_parse_llm_response_handles_markdown_fenced_json() -> None:
     assert parsed["key_findings"][:1] == ["burst_1h high"]
 
 
-def test_parse_llm_response_recovers_partial_json() -> None:
+def test_parse_llm_response_rejects_partial_json() -> None:
     raw = (
         "```json\n"
         '{"narrative":"Likely legitimate repeat customer activity.",'
         '"risk_level":"LOW","confidence":0.64'
     )
+    with pytest.raises(ValueError, match="Unable to parse"):
+        parse_llm_response(raw)
+
+
+def test_parse_llm_response_accepts_single_quotes_and_trailing_commas() -> None:
+    raw = """{
+      'narrative': 'Suspicious merchant spread observed',
+      'risk_level': 'HIGH',
+      'key_findings': ['cross merchant spread'],
+      'hypotheses': ['coordinated probing'],
+      'confidence': 0.81,
+    }"""
     parsed = parse_llm_response(raw)
 
-    assert parsed["risk_level"] == "LOW"
-    assert parsed["confidence"] == 0.64
-    assert parsed.get("_partial_parse") is True
+    assert parsed["risk_level"] == "HIGH"
+    assert parsed["confidence"] == 0.81
+
+
+def test_parse_llm_response_accepts_json_wrapped_as_string() -> None:
+    raw = (
+        '"{\\"narrative\\":\\"Signals align\\",\\"risk_level\\":\\"MEDIUM\\",'
+        '\\"key_findings\\":[\\"velocity\\"] ,\\"hypotheses\\":[],\\"confidence\\":0.66}"'
+    )
+    parsed = parse_llm_response(raw)
+
+    assert parsed["risk_level"] == "MEDIUM"
+    assert parsed["confidence"] == 0.66
 
 
 def test_assemble_prompt_payload_uses_similarity_matches() -> None:

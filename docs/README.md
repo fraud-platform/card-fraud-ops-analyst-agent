@@ -6,7 +6,7 @@ Documentation-first repository for enterprise-grade ops analyst agent implementa
 
 ## Documentation Standards
 
-- Keep published docs inside `docs/01-setup` through `docs/07-reference`.
+- Keep published docs inside `docs/01-setup` through `docs/08-html-reports`.
 - Use lowercase kebab-case file names for topic docs.
 - Exceptions: `README.md`, `codemap.md`, and machine-readable schema artifacts.
 
@@ -73,10 +73,15 @@ Documentation-first repository for enterprise-grade ops analyst agent implementa
 - `07-reference/agentic-runtime-spec.md`
 - `07-reference/adr_009_transaction_management_integration_specification.md`
 
+### `08-html-reports` - Latest E2E Reports
+
+- `08-html-reports/README.md`
+- Latest generated 31-matrix HTML/JSON/audit artifacts (timestamped filenames)
+
 ### Archive Policy
 
 - Legacy planning/scratch docs were removed from `docs/archive/`.
-- Keep only current, code-aligned agentic documentation under `docs/01-setup` to `docs/07-reference`.
+- Keep only current, code-aligned agentic documentation under `docs/01-setup` to `docs/08-html-reports`.
 
 ## Core Index Files
 

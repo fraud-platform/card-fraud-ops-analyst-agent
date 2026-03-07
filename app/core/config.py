@@ -312,8 +312,8 @@ class VectorSearchConfig(BaseSettings):
     """
 
     enabled: bool = Field(default=True)
-    model_name: str = Field(default="mxbai-embed-large")
-    api_base: str = Field(default="http://localhost:11434/api")
+    model_name: str = Field(default="text-embedding-3-large")
+    api_base: str = Field(default="https://api.openai.com/v1")
     api_key: SecretStr = Field(default=SecretStr(""))
     dimension: int = Field(default=1024)
     search_limit: int = Field(default=20)
@@ -325,20 +325,53 @@ class VectorSearchConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="VECTOR_")
 
+    def _populate_api_key_for_resolved_base(self) -> None:
+        """Fill api_key after api_base has reached its final resolved value."""
+        if self.api_key.get_secret_value():
+            return
+
+        vector_key = os.getenv("VECTOR_API_KEY", "")
+        if vector_key:
+            self.api_key = SecretStr(vector_key)
+            return
+
+        # Only inherit cloud keys when embeddings are configured to call a non-local endpoint.
+        # This prevents accidentally sending cloud auth headers to local proxies.
+        api_base = (self.api_base or "").strip().lower()
+        is_local = any(
+            host in api_base
+            for host in (
+                "localhost",
+                "127.0.0.1",
+                "host.docker.internal",
+            )
+        )
+        if is_local:
+            return
+
+        api_key = os.getenv("LLM_API_KEY", "")
+        if api_key:
+            self.api_key = SecretStr(api_key)
+
     @model_validator(mode="after")
-    def fill_ollama_api_key(self) -> VectorSearchConfig:
-        if not self.api_key.get_secret_value():
-            for env_name in ("VECTOR_API_KEY", "OLLAMA_API_KEY", "LLM_API_KEY"):
-                api_key = os.getenv(env_name, "")
-                if api_key:
-                    self.api_key = SecretStr(api_key)
-                    break
+    def fill_api_key(self) -> VectorSearchConfig:
+        self._populate_api_key_for_resolved_base()
         return self
 
     @model_validator(mode="after")
     def align_with_llm_base_url(self) -> VectorSearchConfig:
-        """Default vector API base to LLM cloud base when VECTOR_API_BASE is unset."""
+        """Optionally default vector API base to the LLM cloud base.
+
+        This behavior is OFF by default to avoid accidentally routing local
+        embedding traffic to the cloud when VECTOR_API_BASE is unset.
+
+        Enable explicitly via VECTOR_ALIGN_WITH_LLM_BASE_URL=true.
+        """
         if os.getenv("VECTOR_API_BASE"):
+            return self
+
+        align = os.getenv("VECTOR_ALIGN_WITH_LLM_BASE_URL", "").strip().lower()
+        if align not in {"1", "true", "yes", "on"}:
             return self
 
         current = self.api_base.strip().lower()
@@ -355,13 +388,13 @@ class VectorSearchConfig(BaseSettings):
             return self
 
         self.api_base = llm_base if llm_base.endswith("/api") else f"{llm_base}/api"
+        # Re-run key inheritance on the resolved (possibly remote) base URL.
+        self._populate_api_key_for_resolved_base()
         return self
 
     @model_validator(mode="after")
     def adapt_localhost_for_container_runtime(self) -> VectorSearchConfig:
         """Use host alias when vector base is localhost inside a container."""
-        if os.getenv("VECTOR_API_BASE"):
-            return self
         api_base = self.api_base.strip()
         if _is_running_in_container():
             if api_base.startswith("http://localhost:"):
@@ -380,12 +413,12 @@ class VectorSearchConfig(BaseSettings):
 
 
 class LLMConfig(BaseSettings):
-    provider: str = Field(default="ollama/gpt-oss:20b")
-    base_url: str = Field(default="https://ollama.com")
+    provider: str = Field(default="openai/gpt-5-mini")
+    base_url: str = Field(default="https://api.openai.com/v1")
     api_key: SecretStr = Field(default=SecretStr(""))
-    timeout: int = Field(default=30)
+    timeout: int = Field(default=60)
     max_retries: int = Field(default=1)
-    stage_timeout_seconds: int = Field(default=20)
+    stage_timeout_seconds: int = Field(default=60)
     prompt_guard_enabled: bool = Field(default=True)
     max_prompt_tokens: int = Field(default=4000)
     max_completion_tokens: int = Field(default=384)
@@ -394,43 +427,54 @@ class LLMConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LLM_")
 
     @model_validator(mode="after")
-    def enforce_ollama_cloud_only(self) -> LLMConfig:
-        if not self.provider.startswith(("ollama/", "ollama_chat/")):
+    def enforce_provider_config(self) -> LLMConfig:
+        if "/" not in self.provider:
             raise ValueError(
-                "LLM_PROVIDER must be an Ollama model (prefix ollama/ or ollama_chat/)."
+                "LLM_PROVIDER must be in 'provider/model' format, e.g. 'openai/gpt-5-mini'."
             )
 
         base_url = self.base_url.strip()
         if not base_url:
-            raise ValueError("LLM_BASE_URL is required and must point to Ollama Cloud.")
+            raise ValueError("LLM_BASE_URL is required and must be an HTTP(S) URL.")
 
-        lower = base_url.lower()
-        if "localhost" in lower or "127.0.0.1" in lower:
-            raise ValueError(
-                "LLM_BASE_URL cannot be localhost for reasoning/planner. Use Ollama Cloud endpoint."
-            )
-        if "ollama.com" not in lower:
-            raise ValueError("LLM_BASE_URL must target Ollama Cloud (https://ollama.com).")
+        parsed = urlsplit(base_url)
+        scheme = (parsed.scheme or "").lower()
+        if scheme not in {"http", "https"}:
+            raise ValueError("LLM_BASE_URL must use http or https.")
 
-        if not self.api_key.get_secret_value():
-            ollama_key = os.getenv("OLLAMA_API_KEY", "")
-            if ollama_key:
-                self.api_key = SecretStr(ollama_key)
+        return self
+
+    @model_validator(mode="after")
+    def adapt_localhost_for_container_runtime(self) -> LLMConfig:
+        """Use Docker service hostname when LLM base URL is localhost inside a container."""
+        if _is_running_in_container():
+            if self.base_url.startswith("http://localhost:"):
+                self.base_url = self.base_url.replace(
+                    "http://localhost:",
+                    "http://host.docker.internal:",
+                    1,
+                )
+            elif self.base_url.startswith("https://localhost:"):
+                self.base_url = self.base_url.replace(
+                    "https://localhost:",
+                    "https://host.docker.internal:",
+                    1,
+                )
         return self
 
 
 class LangGraphConfig(BaseSettings):
     max_steps: int = Field(default=20)
-    investigation_timeout_seconds: int = Field(default=120)
-    tool_timeout_seconds: int = Field(default=30)
-    planner_timeout_seconds: int = Field(default=10)
+    investigation_timeout_seconds: int = Field(default=180)
+    tool_timeout_seconds: int = Field(default=120)
+    planner_timeout_seconds: int = Field(default=60)
 
     model_config = SettingsConfigDict(env_prefix="LANGGRAPH_")
 
 
 class PlannerConfig(BaseSettings):
     llm_enabled: bool = Field(default=True)
-    model_name: str = Field(default="ollama/gpt-oss:20b")
+    model_name: str = Field(default="openai/gpt-5-mini")
     temperature: float = Field(default=0.1)
     max_tokens: int = Field(default=256)
     timeout_seconds: int = Field(default=10)
@@ -457,8 +501,6 @@ class TMClientConfig(BaseSettings):
         TM runs as a sibling container named 'transaction-management' in the platform
         Docker network. Localhost from inside the ops-agent container doesn't reach TM.
         """
-        if os.getenv("TM_BASE_URL"):
-            return self
         if _is_running_in_container() and self.base_url.startswith("http://localhost:"):
             self.base_url = self.base_url.replace(
                 "http://localhost:", "http://transaction-management:", 1

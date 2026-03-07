@@ -28,28 +28,31 @@ be provisioned unless artifact export is implemented in a future phase.
 
 #### LLM (Reasoning) configuration
 
-- `LLM_PROVIDER` (e.g. `ollama/gpt-oss:20b`)
-- `LLM_BASE_URL` (`https://ollama.com` for planner/reasoning)
-- `LLM_API_KEY` (Ollama Cloud API key)
-
-If you prefer a single key name for Ollama Cloud, you can set:
-- `OLLAMA_API_KEY` (the service will use this as a fallback for `LLM_API_KEY` and `VECTOR_API_KEY`)
+- `LLM_PROVIDER` — model identifier in `provider/model` format (e.g. `openai/gpt-5-mini`)
+- `LLM_BASE_URL` — API endpoint (e.g. `https://api.openai.com/v1`)
+- `LLM_MAX_COMPLETION_TOKENS` — token budget per LLM call (recommended: `512`)
+- `LLM_API_KEY` — required; OpenAI API key
 
 #### Vector embeddings / similarity
 
 - `VECTOR_ENABLED` (`true`/`false`)
-- `VECTOR_API_BASE` (local: `http://localhost:11434/api`, cloud: `https://ollama.com/api`)
-- `VECTOR_MODEL_NAME` (e.g. `mxbai-embed-large`)
-- `VECTOR_API_KEY` (optional; falls back to `OLLAMA_API_KEY`)
+- `VECTOR_API_BASE` — embeddings endpoint (e.g. `https://api.openai.com/v1`)
+- `VECTOR_MODEL_NAME` — embedding model (e.g. `text-embedding-3-large`)
+- `VECTOR_DIMENSION` — must match model output dimension (`1024` for text-embedding-3-large)
+- `VECTOR_API_KEY` — optional; inherits `LLM_API_KEY` automatically for non-local endpoints
 
-### Recommended local split mode
+### Recommended local configuration
 
-For analyst demos, use cloud reasoning and local embeddings:
-
-- Reasoning (cloud): `LLM_BASE_URL=https://ollama.com`
-- Embeddings (local): `VECTOR_API_BASE=http://localhost:11434/api`
-
-This avoids cloud embedding-model availability gaps while keeping high-quality cloud reasoning.
+| Key | Value |
+|-----|-------|
+| `LLM_PROVIDER` | `openai/gpt-5-mini` |
+| `LLM_BASE_URL` | `https://api.openai.com/v1` |
+| `LLM_API_KEY` | *(your OpenAI key)* |
+| `LLM_MAX_COMPLETION_TOKENS` | `512` |
+| `VECTOR_ENABLED` | `true` |
+| `VECTOR_API_BASE` | `https://api.openai.com/v1` |
+| `VECTOR_MODEL_NAME` | `text-embedding-3-large` |
+| `VECTOR_DIMENSION` | `1024` |
 
 ## Policy
 

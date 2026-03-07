@@ -11,6 +11,7 @@ from app.agent.completion import completion_node
 from app.agent.executor import executor_node
 from app.agent.planner import planner_node
 from app.agent.state import InvestigationState
+from app.core.errors import PlannerError
 
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
@@ -28,14 +29,47 @@ def build_investigation_graph(
 ) -> CompiledStateGraph:
     """Build and compile the investigation StateGraph."""
 
+    async def _save_state(state: InvestigationState) -> None:
+        if state_store is None:
+            return
+        try:
+            await state_store.save_state(
+                investigation_id=state["investigation_id"],
+                state=dict(state),
+            )
+        except Exception:
+            # Best-effort recovery for shared SQLAlchemy session state.
+            try:
+                await state_store._session.rollback()  # pyright: ignore[reportPrivateUsage]
+            except Exception:
+                pass
+            # Never fail the graph due to persistence issues.
+            return
+
     async def planner(state: InvestigationState) -> InvestigationState:
-        return await planner_node(state, llm, registry)
+        try:
+            updated = await planner_node(state, llm, registry)
+        except PlannerError as exc:
+            # Fail-fast (no fallback): surface the planner failure in state,
+            # but do not crash the graph and lose partial progress.
+            updated = {
+                **state,
+                "status": "FAILED",
+                "error": str(exc),
+                "next_action": "COMPLETE",
+            }
+        await _save_state(updated)
+        return updated
 
     async def executor(state: InvestigationState) -> InvestigationState:
-        return await executor_node(state, registry)
+        updated = await executor_node(state, registry)
+        await _save_state(updated)
+        return updated
 
     async def completion(state: InvestigationState) -> InvestigationState:
-        return await completion_node(state, state_store)
+        updated = await completion_node(state, state_store)
+        await _save_state(updated)
+        return updated
 
     builder = StateGraph(InvestigationState)
 

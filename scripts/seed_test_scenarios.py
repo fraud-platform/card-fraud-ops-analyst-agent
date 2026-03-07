@@ -50,7 +50,7 @@ VECTOR_ENABLED = os.getenv("VECTOR_ENABLED", "true").strip().lower() in {
 }
 VECTOR_API_BASE = os.getenv("VECTOR_API_BASE", "http://localhost:11434/api").rstrip("/")
 VECTOR_MODEL_NAME = os.getenv("VECTOR_MODEL_NAME", "mxbai-embed-large")
-VECTOR_API_KEY = os.getenv("VECTOR_API_KEY", os.getenv("OLLAMA_API_KEY", ""))
+VECTOR_API_KEY = os.getenv("VECTOR_API_KEY", os.getenv("LLM_API_KEY", ""))
 MATRIX_SCENARIO_SELECTIONS: list[tuple[str, str, list[int]]] = [
     ("fraud", "card_testing_pattern", [6, 5, 4, 3]),
     ("fraud", "velocity_burst", [12, 11, 10, 9]),
@@ -561,7 +561,7 @@ def seed_transaction_embeddings(conn: psycopg.Connection) -> None:
                 }
             )
             response = client.post(
-                f"{VECTOR_API_BASE}/embed",
+                f"{VECTOR_API_BASE}/api/embed",
                 json={"model": VECTOR_MODEL_NAME, "input": embed_input},
                 headers=headers,
             )

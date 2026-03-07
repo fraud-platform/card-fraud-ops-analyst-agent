@@ -6,9 +6,9 @@ This document provides step-by-step procedures for common operational scenarios.
 
 | Scenario | Severity | First Action | Escalation |
 |----------|----------|--------------|------------|
-| Investigation runtime failure | SEV2 | Check feature flags, enable fallback mode | Platform team |
+| Investigation runtime failure | SEV2 | Check feature flags and dependency health | Platform team |
 | Database connection exhaustion | SEV2 | Check pool metrics, restart workers if needed | DBA team |
-| LLM service degradation | SEV3 | Enable fallback mode, check provider status | LLM provider |
+| LLM service degradation | SEV3 | Validate provider URL + model availability | LLM provider |
 | High latency investigations | SEV3 | Review traces, check vector search | N/A |
 | Auth0/JWKS validation failures | SEV2 | Verify JWKS URL, check token issuer | Security team |
 | Investigation not found (404) | SEV3 | Check timing, verify DB state | N/A |
@@ -61,11 +61,16 @@ jaeger: http://localhost:16686
 **Resolution Actions:**
 
 1. **If LLM reasoning is failing (temporary mitigation only):**
+   Validate endpoint and model first; do not treat degraded LLM output as a pass condition.
    ```bash
-   # Disable LLM reasoning, fall back to evidence-only mode
-   doppler secrets set OPS_AGENT_ENABLE_LLM_REASONING=false
-   # Restart service for settings to take effect
-   kubectl rollout restart deployment/ops-agent
+   doppler secrets get LLM_PROVIDER
+   doppler secrets get LLM_BASE_URL
+   doppler secrets get LLM_API_KEY
+
+   # Verify provider advertises required model
+   printf "Authorization: Bearer %s\n" "$LLM_API_KEY" > /tmp/ops_agent_llm_header
+   curl -H @/tmp/ops_agent_llm_header "$LLM_BASE_URL/api/tags"
+   rm -f /tmp/ops_agent_llm_header
    ```
 
 2. **If vector search is failing (temporary mitigation only):**
@@ -174,36 +179,160 @@ grep "LLM" /var/log/ops-agent/app.log | grep -i "error\|timeout" | tail -20
 
 **Resolution Actions:**
 
-1. **Enable fallback mode:**
+1. **Validate OpenAI endpoint connectivity:**
    ```bash
-   doppler secrets set OPS_AGENT_ENABLE_LLM_REASONING=false
-   kubectl rollout restart deployment/ops-agent
-   # Service will use evidence-only fallback mode (no LLM calls)
+   curl -H "Authorization: Bearer $LLM_API_KEY" "$LLM_BASE_URL/models"
    ```
 
-2. **Validate Ollama endpoint connectivity:**
+2. **Validate model availability for this run:**
    ```bash
-   printf "Authorization: Bearer %s\n" "$LLM_API_KEY" > /tmp/ops_agent_llm_header
-   curl -H @/tmp/ops_agent_llm_header "$LLM_BASE_URL/api/tags"
-   rm -f /tmp/ops_agent_llm_header
+   curl -s -H "Authorization: Bearer $LLM_API_KEY" "$LLM_BASE_URL/models" \
+     | jq -r '.data[].id'
    ```
+   Confirm the selected `LLM_PROVIDER` model is returned.
 
 3. **If authentication fails:**
-   - Verify `LLM_API_KEY` is set and valid
-   - Verify `LLM_PROVIDER` uses `ollama/...` or `ollama_chat/...`
-   - Verify `LLM_BASE_URL` points to Ollama Cloud, not localhost
+   - Verify `LLM_API_KEY` is set and valid in Doppler
+   - Verify `LLM_PROVIDER` uses `provider/model` format (e.g. `openai/gpt-5-mini`)
+   - Verify `LLM_BASE_URL` is `https://api.openai.com/v1`
 
 **Prevention:**
 - Monitor `ops_agent_investigation_latency_seconds{mode="llm"}`
 - Set up alert for P95 > 60s for 15 minutes
-- Use fallback mode for critical operations
+- Fail the matrix run if provider/model preflight fails.
+
+### 3a. E2E Matrix Run Guardrails
+
+Use these checks every time before running `run_e2e_matrix_detailed.py` or pytest E2E matrix workflows.
+
+**Preflight Checklist:**
+
+1. Recreate infra with tracked compose files only:
+  ```bash
+  doppler run --project card-fraud-platform --config local -- \
+    docker compose -f C:/Users/kanna/github/card-fraud-platform/docker-compose.yml \
+    -f C:/Users/kanna/github/card-fraud-platform/docker-compose.apps.yml \
+    --profile platform up -d --build transaction-management ops-analyst-agent
+  ```
+
+2. Confirm both services are healthy (no stale container path):
+  ```bash
+  curl http://localhost:8003/api/v1/health/ready
+  curl http://localhost:8002/api/v1/health
+  ```
+
+3. Confirm selected model is present on the runtime provider endpoint:
+  ```powershell
+  $envText = docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' card-fraud-ops-analyst-agent
+  $llm_api_key = ($envText | Select-String '^LLM_API_KEY=').ToString().Split('=', 2)[1].Trim()
+  if (-not $llm_api_key) {
+    Write-Error "LLM_API_KEY missing from container env."
+    exit 1
+  }
+  $llm_provider = ($envText | Select-String '^LLM_PROVIDER=').ToString().Split('=', 2)[1].Trim()
+  $llm_base_url = ($envText | Select-String '^LLM_BASE_URL=').ToString().Split('=', 2)[1].Trim()
+
+  if (-not $llm_provider -or -not $llm_base_url) {
+    Write-Error "LLM_PROVIDER or LLM_BASE_URL is missing from container env."
+    exit 1
+  }
+
+  $model = ($llm_provider -split '/', 2)[1].Trim()
+  $modelsResponse = Invoke-RestMethod -Headers @{ Authorization = "Bearer $llm_api_key" } -Uri "$llm_base_url/models"
+  $modelIds = $modelsResponse.data | Select-Object -ExpandProperty id
+  if ($modelIds -notcontains $model) {
+    Write-Warning "Model '$model' not in /models list — attempting chat call anyway."
+  } else {
+    Write-Output "LLM preflight OK: $model found in /models."
+  }
+  ```
+
+4. Validate container model configuration matches test request:
+  ```bash
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' card-fraud-ops-analyst-agent \
+    | Select-String '^LLM_PROVIDER=\|^PLANNER_MODEL_NAME='
+  ```
+
+5. Ensure run output is KPI-clean before sharing:
+   - `kpi_all_pass=True`
+   - `reasoning_llm_failed:* = 0`
+   - `reasoning_llm_failed` absent from all scenario rows
+   - `tool_failure:* = 0`
+   - `status_counts["COMPLETED"] == scenario_count`
+
+### 3b. No Silent Failures
+
+- A scenario must include both:
+  - `issues` list in matrix output JSON (`e2e-31matrix-report-...json`)
+  - `Fraud Analyst Assessment` stage status in HTML
+- If both are empty/green while actual tool failures are observed in service logs, treat the run as invalid and stop.
+- Do not report pass/fail from partial report snippets; always use the run summary (`status_counts`, `issue_counts`, `kpi_*`) to decide publishability.
+
+### 3d. LLM Preflight (Mandatory)
+
+- Quick command check for model/key health before running suites:
+  ```powershell
+  $envText = docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' card-fraud-ops-analyst-agent
+  $llm_provider = ($envText | Select-String '^LLM_PROVIDER=').ToString().Split('=', 2)[1].Trim()
+  $llm_base_url = ($envText | Select-String '^LLM_BASE_URL=').ToString().Split('=', 2)[1].Trim()
+  $llm_api_key = ($envText | Select-String '^LLM_API_KEY=').ToString().Split('=', 2)[1].Trim()
+  $model = ($llm_provider -split '/', 2)[1].Trim()
+
+  Invoke-RestMethod -Headers @{ Authorization = "Bearer $llm_api_key" } -Uri "$llm_base_url/models" |
+    Select-Object -ExpandProperty data | Select-Object -ExpandProperty id | Select-String -Pattern "^$([regex]::Escape($model))$"
+
+  $body = @{model=$model; messages=@(@{role='user'; content='health check'}); max_completion_tokens=50} | ConvertTo-Json -Depth 4
+  Invoke-RestMethod -Method Post -Uri "$llm_base_url/chat/completions" `
+    -Headers @{ Authorization = "Bearer $llm_api_key"; 'Content-Type'='application/json' } `
+    -Body $body
+  ```
+- Fail immediately if:
+  - `/api/tags` is not HTTP 200
+  - model is not present in tags response
+  - `/api/chat` does not return HTTP 200
+  - chat response body includes usage/quota errors
+- Equivalent code-level preflight:
+  `doppler run --config local -- uv run pytest tests/e2e/test_scenarios.py::test_llm_chat_preflight -v`
+
+### 3e. No-Mistake Run Gate
+
+Run this order as a hard gate before any matrix/e2e execution in the same shell:
+
+1. Recreate infra with tracked compose files only.
+2. Validate both services are healthy (`/api/v1/health/ready`, `8002` and `8003` containers).
+3. Run both LLM checks:
+   - `/api/tags` includes selected model
+   - `/api/chat` returns HTTP 200
+4. Confirm model tokens match between compose env and provider session.
+5. Confirm container image/source timestamp alignment (`scripts/docker_guard.py` checks).
+6. Capture run summary and stop immediately if:
+   - `kpi_all_pass != True`
+   - `reasoning_llm_failed` exists
+   - `tool_failure` > 0
+   - `status_counts["FAILED"] > 0`
+
+If any gate step fails, stop and do not publish any report as a demo artifact.
+
+### 3c. Common Recovery
+
+- If preflight model check fails: update compose/env for a supported model name and restart both services before rerunning.
+- If stale container check fails: rerun `docker compose ... --build` with the same profile.
+- If LLM timeouts continue after valid model/preflight: switch to a known stable smaller model and retune timeout for the run only.
+- If LLM API returns usage/quota errors (for example `reached your weekly usage limit`): rotate `LLM_API_KEY` (or use a different provider/model) and rerun preflight before retrying matrix/e2e.
+
+**Failure handling:**
+
+1. **If preflight model tag is missing**: stop and switch to a valid model name for this session.
+2. **If `run_e2e_matrix_detailed.py` returns non-zero**: do not publish report artifacts as demo evidence until rerun clears KPI gate.
+3. **If `reasoning_tool` starts timing out**: treat as infrastructure/provider issue (not a graph fallback signal), increase model timeout or switch model only after validating provider availability and cost/sla impact.
+4. **If `reasoning_llm_failed:not_executed` appears in matrix output**: stop the run, run API key/token checks and `/api/chat` smoke test with current model before retrying.
 
 ---
 
-### 4. High Latency Investigations
+### 5. High Latency Investigations
 
 **Symptoms:**
-- `POST /investigations/run` taking > 2 seconds (fallback path) or > 90s (LLM)
+- `POST /investigations/run` taking > 90s (LLM) in fail-fast mode
 - Analyst complaints about slow investigations
 - Metrics: `ops_agent_investigation_latency_seconds` P95 above baseline
 
@@ -242,7 +371,7 @@ LIMIT 10;
 3. **If LLM reasoning is slow (> 60s):**
    - Check LLM provider response time
    - Consider smaller prompt (`LLM_MAX_PROMPT_TOKENS`)
-   - Enable fallback mode
+   - Fail the release gate until resolved for LLM mode
 
 4. **If recommendation generation is slow (> 100ms):**
    - Check conflict matrix computation (if enabled)
@@ -463,7 +592,7 @@ These are emergency rollback controls, not steady-state defaults. Restore defaul
 ### Key Metrics to Watch
 
 1. **Investigation Latency**
-   - `ops_agent_investigation_latency_seconds` P95 < 500ms (fallback path target)
+   - `ops_agent_investigation_latency_seconds` P95 < 90s (agentic LLM mode gate)
    - `ops_agent_investigation_latency_seconds{mode="llm"}` P95 < 90s
    - Alert if P95 > 2x baseline for 15 minutes
 

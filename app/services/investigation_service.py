@@ -117,6 +117,24 @@ class InvestigationService:
             },
         )
 
+        trace_id = get_current_trace_id()
+        if trace_id:
+            initial_state["trace_id"] = trace_id
+
+        # Persist an initial state snapshot immediately so detail views work even if
+        # the graph fails before the first tool executes.
+        try:
+            await self._state_store.save_state(
+                investigation_id=investigation_id, state=initial_state
+            )
+            await self._session.commit()
+        except Exception as exc:
+            logger.warning(
+                "Failed to persist initial state",
+                investigation_id=investigation_id,
+                error=str(exc),
+            )
+
         await self._investigation_repo.update_status(investigation_id, "IN_PROGRESS")
         await self._session.commit()
 
@@ -139,10 +157,8 @@ class InvestigationService:
                         span.set_attribute("case_id", case_id)
                     if scenario_name:
                         span.set_attribute("scenario_name", scenario_name)
-                    trace_id = get_current_trace_id()
                     if trace_id:
                         span.set_attribute("trace_id", trace_id)
-                        initial_state["trace_id"] = trace_id
                     result = await graph.ainvoke(initial_state)
                     span.set_attribute("status", result.get("status", "COMPLETED"))
                     span.set_attribute("severity", result.get("severity", "LOW"))
@@ -150,10 +166,13 @@ class InvestigationService:
                     if trace_id and not result.get("trace_id"):
                         result = {**result, "trace_id": trace_id}
         except TimeoutError:
+            latest_state = await self._state_store.load_state(investigation_id)
+            base_state = latest_state or initial_state
             result = {
-                **initial_state,
+                **base_state,
                 "status": "TIMED_OUT",
                 "error": "Investigation timed out",
+                "completed_at": utc_now().isoformat(),
             }
         except Exception as exc:
             logger.error(
@@ -162,11 +181,26 @@ class InvestigationService:
                 error=str(exc),
                 exc_info=True,
             )
+            latest_state = await self._state_store.load_state(investigation_id)
+            base_state = latest_state or initial_state
             result = {
-                **initial_state,
+                **base_state,
                 "status": "FAILED",
                 "error": str(exc),
+                "completed_at": utc_now().isoformat(),
             }
+
+        # Best-effort persistence for terminal failure states when the graph didn't reach completion.
+        if result.get("status") in {"FAILED", "TIMED_OUT"}:
+            try:
+                await self._state_store.save_state(investigation_id=investigation_id, state=result)
+                await self._session.commit()
+            except Exception as exc:
+                logger.warning(
+                    "Failed to persist terminal failure state",
+                    investigation_id=investigation_id,
+                    error=str(exc),
+                )
 
         await self._complete_investigation(investigation_id, result)
 
@@ -435,7 +469,24 @@ class InvestigationService:
         recommendations = state.get("recommendations", [])
         for rec in recommendations:
             try:
-                rec_type = rec.get("type", "REVIEW")
+                rec_type = rec.get("type") or rec.get("recommendation_type", "review_priority")
+                if not rec_type:
+                    rec_type = "review_priority"
+                rec_type = str(rec_type).strip()
+                # Compatibility: legacy uppercase values from older runs.
+                legacy_map = {
+                    "REVIEW": "review_priority",
+                    "review": "review_priority",
+                    "REVIEW_PRIORITY": "review_priority",
+                    "CASE_ACTION": "case_action",
+                    "RULE_CANDIDATE": "rule_candidate",
+                }
+                if rec_type in legacy_map:
+                    rec_type = legacy_map[rec_type]
+                else:
+                    rec_type = rec_type.lower()
+                if rec_type not in ("review_priority", "case_action", "rule_candidate"):
+                    rec_type = "review_priority"
                 rec_payload = rec.get("payload", {})
                 rec_title = rec.get("title", "Generated recommendation")
                 rec_impact = rec.get("impact", "Review recommended")
@@ -600,6 +651,7 @@ class InvestigationService:
         registry = ToolRegistry()
 
         from app.tools.context_tool import ContextTool
+        from app.tools.link_analysis_tool import LinkAnalysisTool
         from app.tools.pattern_tool import PatternTool
         from app.tools.reasoning_tool import ReasoningTool
         from app.tools.recommendation_tool import RecommendationTool
@@ -614,6 +666,7 @@ class InvestigationService:
                 session=self._session,
             )
         )
+        registry.register(LinkAnalysisTool(tm_client=self._tm_client))
         registry.register(ReasoningTool(llm=llm, settings=self._settings))
         registry.register(RecommendationTool())
         registry.register(RuleDraftTool())

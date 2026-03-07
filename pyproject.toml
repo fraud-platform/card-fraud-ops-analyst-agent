@@ -27,7 +27,7 @@ dependencies = [
     "tenacity>=8.2.0",
     "langgraph>=0.3.0",
     "langchain-core>=0.3.0",
-    "langchain-ollama>=0.3.0",
+
 ]
 
 [project.optional-dependencies]

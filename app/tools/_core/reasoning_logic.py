@@ -3,12 +3,14 @@
 This module contains ZERO database access. Pure functions operating on in-memory data.
 """
 
+import ast
 import dataclasses
 import json
 import re
 from typing import Any, cast
 
 from app.tools._core.pattern_utils import to_pattern_dicts
+from app.utils.type_utils import to_float
 
 PROMPT_INJECTION_PATTERNS = [
     re.compile(
@@ -113,19 +115,12 @@ def validate_prompt_payload(payload: dict[str, Any], max_depth: int = 0) -> list
     return errors
 
 
-def _to_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except TypeError, ValueError:
-        return default
-
-
 def _normalize_similarity_match(match: Any) -> dict[str, Any] | None:
     if isinstance(match, dict):
         transaction_id = (
             match.get("transaction_id") or match.get("match_id") or match.get("id") or ""
         )
-        score = _to_float(match.get("score", match.get("similarity_score", 0.0)))
+        score = to_float(match.get("score", match.get("similarity_score", 0.0)))
         return {
             "transaction_id": transaction_id,
             "match_type": match.get("match_type", "unknown"),
@@ -140,7 +135,7 @@ def _normalize_similarity_match(match: Any) -> dict[str, Any] | None:
         return None
 
     transaction_id = getattr(match, "transaction_id", None) or getattr(match, "match_id", "") or ""
-    score = _to_float(getattr(match, "score", getattr(match, "similarity_score", 0.0)))
+    score = to_float(getattr(match, "score", getattr(match, "similarity_score", 0.0)))
     return {
         "transaction_id": transaction_id,
         "match_type": getattr(match, "match_type", "unknown"),
@@ -177,7 +172,7 @@ def _similarity_dict(similarity_analysis: dict[str, Any]) -> dict[str, Any]:
         if raw_score is None:
             raw_score = similarity_analysis.get("overall_score", 0.0)
         return {
-            "overall_score": _to_float(raw_score, 0.0),
+            "overall_score": to_float(raw_score, 0.0),
             "matches": matches,
             "counter_evidence": sim_result_dict.get(
                 "counter_evidence",
@@ -196,7 +191,7 @@ def _similarity_dict(similarity_analysis: dict[str, Any]) -> dict[str, Any]:
         raw_overall_score = max((m.get("score", 0.0) for m in matches), default=0.0)
 
     return {
-        "overall_score": _to_float(raw_overall_score, 0.0),
+        "overall_score": to_float(raw_overall_score, 0.0),
         "matches": matches,
         "counter_evidence": similarity_analysis.get("counter_evidence"),
     }
@@ -238,6 +233,7 @@ def assemble_prompt_payload(
     context: dict[str, Any],
     pattern_analysis: dict[str, Any],
     similarity_analysis: dict[str, Any],
+    link_analysis: dict[str, Any] | None = None,
     conflict_matrix: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble structured evidence for prompt template.
@@ -411,6 +407,25 @@ def assemble_prompt_payload(
                 feature_lines.append(f"  - {value}: {features[key]}")
         features_text = "\n".join(feature_lines) if feature_lines else "No features computed"
 
+    link_analysis_payload: dict[str, Any] = {}
+    if isinstance(link_analysis, dict) and link_analysis:
+        metrics = link_analysis.get("metrics", {})
+        if not isinstance(metrics, dict):
+            metrics = {}
+        signals = link_analysis.get("signals", [])
+        if not isinstance(signals, list):
+            signals = []
+        hypotheses = link_analysis.get("hypotheses", [])
+        if not isinstance(hypotheses, list):
+            hypotheses = []
+        link_analysis_payload = {
+            "overall_score": to_float(link_analysis.get("overall_score", 0.0), 0.0),
+            "signals": [str(item) for item in signals[:8]],
+            "metrics": metrics,
+            "hypotheses": hypotheses[:4],
+            "summary": str(link_analysis.get("summary", ""))[:400],
+        }
+
     return {
         "transaction_id": transaction.get("transaction_id", "unknown"),
         "card_id": transaction.get("card_id", "unknown"),
@@ -442,6 +457,7 @@ def assemble_prompt_payload(
         "insight_summary": context.get("insight_summary", ""),
         "observations": observations,
         "context_features": features_text,
+        "link_analysis": link_analysis_payload,
     }
 
 
@@ -633,105 +649,73 @@ def _extract_balanced_json(text: str) -> str | None:
     return None
 
 
-def _extract_string_field(text: str, key: str) -> str | None:
-    match = re.search(rf'"{re.escape(key)}"\s*:\s*"((?:\\.|[^"\\])*)"', text, flags=re.DOTALL)
-    if not match:
-        return None
-    raw = match.group(1)
-    try:
-        return json.loads(f'"{raw}"')
-    except json.JSONDecodeError:
-        return raw
+def _normalize_json_candidate(text: str) -> str:
+    """Normalize common LLM JSON formatting glitches before strict parsing."""
+    normalized = text.strip().replace("\u0000", "")
+    normalized = normalized.replace("“", '"').replace("”", '"')
+    normalized = normalized.replace("’", "'").replace("‘", "'")
+    normalized = re.sub(r",\s*([}\]])", r"\1", normalized)
+    return normalized
 
 
-def _extract_open_string_field(text: str, key: str) -> str | None:
-    match = re.search(rf'"{re.escape(key)}"\s*:\s*"([\s\S]+)', text, flags=re.DOTALL)
-    if not match:
-        return None
-    tail = match.group(1)
-    stop_markers = (
-        '",\n  "risk_level"',
-        '",\n "risk_level"',
-        '", "risk_level"',
-        '","risk_level"',
-        '"\n}',
-        '"}',
-    )
-    end = len(tail)
-    for marker in stop_markers:
-        idx = tail.find(marker)
-        if idx >= 0:
-            end = min(end, idx)
-    candidate = tail[:end].strip().strip(",")
-    if not candidate:
-        return None
-    return candidate[:600]
+def _parse_candidate_dict(candidate: str) -> dict[str, Any] | None:
+    """Best-effort parse for JSON-like LLM output."""
 
-
-def _extract_float_field(text: str, key: str) -> float | None:
-    match = re.search(rf'"{re.escape(key)}"\s*:\s*(-?\d+(?:\.\d+)?)', text)
-    if not match:
-        return None
-    try:
-        return float(match.group(1))
-    except TypeError, ValueError:
+    def _json_to_dict(value: str) -> dict[str, Any] | None:
+        for strict in (True, False):
+            try:
+                parsed = json.loads(value) if strict else json.loads(value, strict=False)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+            if isinstance(parsed, str):
+                nested = parsed.strip()
+                if nested.startswith("{") and nested.endswith("}"):
+                    try:
+                        nested_parsed = json.loads(nested)
+                        if isinstance(nested_parsed, dict):
+                            return nested_parsed
+                    except json.JSONDecodeError:
+                        pass
+            return None
         return None
 
+    raw = candidate.strip()
+    normalized = _normalize_json_candidate(raw)
+    attempts: list[str] = []
+    for value in (raw, normalized, _extract_balanced_json(normalized)):
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed and trimmed not in attempts:
+                attempts.append(trimmed)
 
-def _extract_string_array_field(text: str, key: str) -> list[str]:
-    match = re.search(rf'"{re.escape(key)}"\s*:\s*(\[[\s\S]*?\])', text, flags=re.DOTALL)
-    if not match:
-        return []
-    try:
-        parsed = json.loads(match.group(1))
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(parsed, list):
-        return []
-    return [item for item in parsed if isinstance(item, str)]
+    for attempt in attempts:
+        parsed = _json_to_dict(attempt)
+        if parsed is not None:
+            return parsed
 
-
-def _partial_parse_llm_response(text: str) -> dict[str, Any] | None:
-    narrative = _extract_string_field(text, "narrative")
-    if not narrative:
-        narrative = _extract_open_string_field(text, "narrative")
-
-    risk_level = _extract_string_field(text, "risk_level")
-    if not risk_level:
-        fallback_risk = re.search(
-            r'"?risk_level"?\s*:\s*"?(CRITICAL|HIGH|MEDIUM|LOW|UNKNOWN)"?',
-            text,
-            flags=re.IGNORECASE,
-        )
-        if fallback_risk:
-            risk_level = fallback_risk.group(1)
-    confidence = _extract_float_field(text, "confidence")
-    findings = _extract_string_array_field(text, "key_findings")
-    hypotheses = _extract_string_array_field(text, "hypotheses")
-
-    if isinstance(risk_level, str):
-        risk_level = risk_level.upper().strip()
-        if risk_level not in VALID_RISK_LEVELS:
-            risk_level = None
-
-    if not (narrative or risk_level or confidence is not None):
-        return None
-
-    payload: dict[str, Any] = {
-        "narrative": narrative or "Model returned partial JSON response",
-        "risk_level": risk_level or "MEDIUM",
-        "key_findings": findings,
-        "hypotheses": hypotheses,
-        "confidence": confidence if confidence is not None else 0.5,
-        "_partial_parse": True,
-    }
-    if narrative:
-        payload["summary"] = narrative
-    return validate_llm_output(payload)[0]
+    for attempt in attempts:
+        try:
+            parsed_literal = ast.literal_eval(attempt)
+        except SyntaxError, ValueError:
+            continue
+        if isinstance(parsed_literal, dict):
+            return parsed_literal
+        if isinstance(parsed_literal, str):
+            nested_literal = parsed_literal.strip()
+            nested_parsed = _json_to_dict(nested_literal)
+            if nested_parsed is not None:
+                return nested_parsed
+    return None
 
 
 def parse_llm_response(raw_response: str) -> dict[str, Any]:
-    """Parse and validate LLM response with strict-then-fallback strategies."""
+    """Parse and validate LLM response.
+
+    This is intentionally strict: if the model response is not valid JSON matching
+    the expected schema, this function raises.
+    """
     cleaned = raw_response.strip()
     stripped_fences = _strip_markdown_fences(cleaned)
 
@@ -757,14 +741,8 @@ def parse_llm_response(raw_response: str) -> dict[str, Any]:
     add_candidate(_extract_balanced_json(stripped_fences))
 
     for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
+        parsed = _parse_candidate_dict(candidate)
+        if parsed is not None:
             return validate_llm_output(parsed)[0]
-        except json.JSONDecodeError:
-            continue
-
-    partial = _partial_parse_llm_response(cleaned) or _partial_parse_llm_response(stripped_fences)
-    if partial is not None:
-        return partial
 
     raise ValueError("Unable to parse LLM response into expected JSON schema")

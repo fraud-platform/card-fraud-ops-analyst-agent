@@ -110,22 +110,24 @@ Latest migrations include run-level audit snapshot columns (`runtime_feature_fla
 Vector similarity is enabled by default (`VECTOR_ENABLED=true`), so the database must have the `pgvector` extension available.
 If your Postgres instance does not include pgvector, the embeddings migration (`006_add_transaction_embeddings_pgvector.sql`) cannot be applied and `uv run db-verify` will fail when vector is enabled.
 
-### 6. Configure Recommended Local Split Mode
+### 6. Configure OpenAI (LLM + Embeddings)
 
-Use cloud reasoning with local embeddings:
+Set the following in Doppler:
 
 ```bash
 doppler secrets set OPS_AGENT_ENABLE_LLM_REASONING=true
-doppler secrets set LLM_PROVIDER=ollama/gpt-oss:20b
-doppler secrets set LLM_BASE_URL=https://ollama.com
+doppler secrets set LLM_PROVIDER=openai/gpt-5-mini
+doppler secrets set LLM_BASE_URL=https://api.openai.com/v1
+doppler secrets set LLM_MAX_COMPLETION_TOKENS=512
+doppler secrets set LLM_API_KEY=<your-openai-api-key>
 
 doppler secrets set VECTOR_ENABLED=true
-doppler secrets set VECTOR_API_BASE=http://localhost:11434/api
-doppler secrets set VECTOR_MODEL_NAME=mxbai-embed-large
+doppler secrets set VECTOR_API_BASE=https://api.openai.com/v1
+doppler secrets set VECTOR_MODEL_NAME=text-embedding-3-large
+doppler secrets set VECTOR_DIMENSION=1024
 ```
 
-When running the API in Docker on platform port `8003`, you can omit `VECTOR_API_BASE`.
-If omitted, the service auto-resolves host Ollama via `host.docker.internal`.
+`LLM_API_KEY` is the single key used for both LLM and embeddings.
 
 Verify embedding preflight before running e2e:
 
@@ -133,7 +135,7 @@ Verify embedding preflight before running e2e:
 doppler run -- uv run python -c "import asyncio; from app.clients.embedding_client import EmbeddingClient; r=asyncio.run(EmbeddingClient().embed('preflight')); print(len(r.embedding), r.model)"
 ```
 
-Expected output: `1024 mxbai-embed-large` (dimension and model).
+Expected output: `1024 text-embedding-3-large` (dimension and model).
 
 ### 7. Load Test Data (Optional)
 
@@ -151,29 +153,21 @@ uv run doppler-local
 
 Server starts on `http://localhost:8003`. OpenAPI docs at `http://localhost:8003/docs`.
 
-## Ollama Setup (Optional: Fully Local LLM + Embeddings)
+## OpenAI Setup
 
-LLM reasoning and vector similarity are enabled by default. To run both
-reasoning and embeddings locally with Ollama:
+LLM reasoning and vector similarity both use OpenAI. Set `LLM_API_KEY` in Doppler.
 
-```bash
-# 1. Install Ollama from https://ollama.com/download
+| Key | Value |
+|-----|-------|
+| `LLM_PROVIDER` | `openai/gpt-5-mini` |
+| `LLM_BASE_URL` | `https://api.openai.com/v1` |
+| `LLM_MAX_COMPLETION_TOKENS` | `512` |
+| `LLM_API_KEY` | *(your OpenAI key — set in Doppler)* |
+| `VECTOR_API_BASE` | `https://api.openai.com/v1` |
+| `VECTOR_MODEL_NAME` | `text-embedding-3-large` |
+| `VECTOR_DIMENSION` | `1024` |
 
-# 2. Pull the model
-ollama pull llama3.2
-
-# 3. Verify Ollama is running
-ollama run llama3.2 "ping"
-```
-
-Set the following secrets in Doppler (local config):
-
-```bash
-doppler secrets set OPS_AGENT_ENABLE_LLM_REASONING=true
-doppler secrets set LLM_PROVIDER=ollama_chat/llama3.2
-doppler secrets set LLM_BASE_URL=http://localhost:11434
-doppler secrets set LLM_API_KEY=ollama
-```
+One key covers both LLM and embeddings — `LLM_API_KEY` is inherited automatically by the embedding client.
 
 Restart `uv run doppler-local` after changing Doppler secrets.
 

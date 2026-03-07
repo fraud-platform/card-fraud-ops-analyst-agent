@@ -12,7 +12,7 @@ Usage:
 Requires:
     - Ops Analyst Agent server running (http://localhost:8003)
     - Transaction Management server running (http://localhost:8002)
-    - Ollama running (http://localhost:11434) for LLM planner
+    - OpenAI API (LLM reasoning + embeddings)
 """
 
 from __future__ import annotations

@@ -6,7 +6,7 @@ This document is a repo-by-repo execution plan to increase agent autonomy and in
 
 It also fixes a critical testing/reporting issue: the current detailed HTML report can show **PASS** even when internal tool steps fail (for example `embedding_or_similarity_failed`), because the report pass/fail is primarily driven by HTTP status codes recorded in stages, not investigation-quality KPIs.
 
-Reference example: `docs/temporary-reports/e2e-scenarios-report-31matrix-20260226-081447.html` shows `Passed=31` while containing repeated internal errors like `"reason": "embedding_or_similarity_failed"` and `"error": "All connection attempts failed"`.
+Reference example: `docs/08-html-reports/e2e-31matrix-report-20260307-111513.html` shows full matrix output while investigation-quality issues are tracked separately via KPI/status metrics.
 
 ## Goals
 
@@ -18,7 +18,7 @@ Reference example: `docs/temporary-reports/e2e-scenarios-report-31matrix-2026022
 - Correct rule draft export integration so ops-agent exports into Rule Management's real API contract.
 
 
-## Current Status Snapshot (2026-02-28)
+## Current Status Snapshot (2026-03-07)
 
 Completed in codebase:
 - Timestamped report naming is implemented for matrix and pytest report flows.
@@ -34,19 +34,21 @@ Validated in this pass:
 - KPI evaluation is now rendered as a dedicated scenario so report status is explicit.
 - Matrix command now exits non-zero when KPI gate fails.
 - Stage-audit output is generated after final scenario status adjustments (no stale pass/fail drift).
-- 31-matrix run is clean and KPI-gated (`kpi_all_pass=True`) in `htmlcov/e2e-31matrix-report-20260228-070147.html`.
-- 23-scenario pytest E2E suite is clean (`23 passed`) in `htmlcov/e2e-pytest-report-20260228-071637.html`.
+- 31-matrix run is clean and KPI-gated (`kpi_all_pass=True`) in `docs/08-html-reports/e2e-31matrix-report-20260307-111513.html`.
+- Pytest E2E report is generated in `docs/08-html-reports/e2e-pytest-report-20260307-065729.html`.
 - Jaeger trace searchability verified end-to-end via local Jaeger API (`service=ops-analyst-agent`, searchable trace tags include `investigation_id`, `transaction_id`, `scenario_name`, `case_id`, `tool_status`, `model_mode`).
 - Rule export contract validated end-to-end against Rule Management `POST /api/v1/rules` using mapped legacy ops-agent payload.
-- No-fraud over-escalation regression fixed (isolated moderate `amount_anomaly` + strong counter-evidence now calibrates to `LOW`); validated in fresh 31-matrix run `htmlcov/e2e-31matrix-report-20260228-070147.html` and pytest E2E run `htmlcov/e2e-pytest-report-20260228-071637.html`.
+- No-fraud over-escalation regression fixed (isolated moderate `amount_anomaly` + strong counter-evidence now calibrates to `LOW`); validated in current matrix and pytest E2E reports under `docs/08-html-reports/`.
 
-Still pending (current repo only):
-- Phase 2A in `card-fraud-ops-analyst-agent`: add `LinkAnalysisTool` and graph wiring (`app/tools/link_analysis_tool.py`, `app/tools/_core/link_analysis_logic.py`, service registry).
-- Phase 2B consumer work in `card-fraud-ops-analyst-agent`: extend `TMClient` calls and `link_analysis_tool` to consume TM device/IP neighborhood endpoints once TM side is finalized.
+Cross-repo completion snapshot:
+- Phase 2A in `card-fraud-ops-analyst-agent` is implemented (`LinkAnalysisTool`, graph wiring, reasoning integration).
+- Phase 2B TM-side query support is implemented in `card-fraud-transaction-management` (IP/device/fingerprint filters).
+- Phase 2B consumer work in `card-fraud-ops-analyst-agent` is implemented (`TMClient` neighborhood methods + link-analysis enrichment).
+- Phase 1.4 UI alignment is implemented in `card-fraud-intelligence-portal` (`model_mode="agentic"` types and labels).
 
 Comments:
-- Phase 0 and Phase 1 items for this repo are complete and validated by both E2E paths (`31-matrix` and `pytest 23-scenario`).
-- Cross-repo items (Portal/TM/Rule Management) are intentionally handled in separate sessions and are not blockers for this repo commit.
+- Phase 0 and Phase 1 items for this repo are complete and validated by both E2E paths (`31-matrix` and pytest E2E).
+- Cross-repo items (Portal/TM/Rule Management) are now complete and reflected in the execution checklist below.
 
 ## Non-Goals (for Phase 0-2)
 
@@ -378,14 +380,14 @@ Add a lightweight publish gate:
 Touch points:
 - `scripts/run_e2e_matrix_detailed.py`
 - `tests/e2e/reporter.py` (render metadata)
-- `docs/temporary-reports/README.md` (state that reports are only meaningful if KPI gate passes)
+- `docs/08-html-reports/README.md` (state that reports are only meaningful if KPI gate passes)
 
 ## Execution Checklist (Suggested PR Sequence)
 
 1. PR1 (ops-agent): Phase 0.2/0.3/0.4 (truthful KPI gate + filenames + metadata) - DONE
 2. PR2 (ops-agent): Phase 0.1/0.5 (dependency guard + trace attributes + Jaeger searchability) - DONE
 3. PR3 (ops-agent): Phase 1.1/1.2 (context.features + reasoning contract) - DONE
-4. PR4 (portal): Phase 1.4 (types/labels align to agentic) - SEPARATE SESSION
+4. PR4 (portal): Phase 1.4 (types/labels align to agentic) - DONE
 5. PR5 (ops-agent + rule-mgmt): Rule export contract fix (Option A or B) - DONE (ops-agent side + live validation complete)
-6. PR6 (ops-agent): Phase 2A (link analysis without TM changes) - PENDING
-7. PR7 (TM + ops-agent): Phase 2B (device/IP ring detection) - PENDING (cross-repo dependency)
+6. PR6 (ops-agent): Phase 2A (link analysis without TM changes) - DONE
+7. PR7 (TM + ops-agent): Phase 2B (device/IP ring detection) - DONE

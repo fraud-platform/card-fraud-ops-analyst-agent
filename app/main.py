@@ -140,8 +140,8 @@ def create_app() -> FastAPI:
 
         This enables request correlation across services:
         - Portal -> Ops Agent -> Rule Management
-        - Portal -> Ops Agent -> Ollama (LLM)
-        - Portal -> Ops Agent -> Ollama (Embeddings)
+        - Portal -> Ops Agent -> OpenAI LLM
+        - Portal -> Ops Agent -> OpenAI Embeddings
         """
         # Extract or generate request ID
         incoming_rid = request.headers.get("x-request-id") or request.headers.get("X-Request-ID")

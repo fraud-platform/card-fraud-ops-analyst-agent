@@ -101,6 +101,7 @@ class ContextTool(BaseTool):
             velocity_snapshot=context.get("velocity_snapshot", {}),
         )
         context["features"] = features
+        context["merchant_history"] = merchant_history
 
         logger.info(
             "Context assembled",

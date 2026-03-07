@@ -54,6 +54,7 @@ class InvestigationState(TypedDict):
 
     pattern_results: dict[str, Any]
     similarity_results: dict[str, Any]
+    link_analysis_results: dict[str, Any]
     hypotheses: list[dict[str, Any] | str]
     evidence: list[dict[str, Any]]
 
@@ -105,6 +106,7 @@ def create_initial_state(
         context={},
         pattern_results={},
         similarity_results={},
+        link_analysis_results={},
         hypotheses=[],
         evidence=[],
         reasoning={},

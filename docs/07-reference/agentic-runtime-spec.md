@@ -56,7 +56,7 @@ Each tool execution records:
 
 ## Similarity and Embedding Path
 
-- Embeddings use configured provider/model (`mxbai-embed-large`, 1024 dim expected in current config).
+- Embeddings use configured provider/model (`text-embedding-3-large`, 1024 dim via `dimensions` param).
 - Similarity search is thresholded and bounded (`search_limit`, `min_similarity`).
 - On embedding/vector failure, heuristic SQL fallback runs and diagnostics are attached to `similarity_results.vector_diagnostics`.
 
@@ -67,7 +67,31 @@ LLM is used in two stages:
 1. Planner stage (`planner_node`) for next-tool selection.
 2. Reasoning stage (`reasoning_tool`) for structured risk synthesis.
 
+### LLM + non-LLM tool matrix
+
+| Stage | Component | LLM call? | Notes |
+|-------|-----------|-----------|-------|
+| 1 | `planner_node` | Yes | Calls OpenAI `/chat/completions` with JSON mode (`tool`, `reason`, `confidence`) to pick next tool. |
+| 2 | `context_tool` | No | Calls Transaction Management APIs for transaction and history data. |
+| 3 | `pattern_tool` | No | Local scoring logic only. |
+| 4 | `similarity_tool` | No direct chat LLM | Calls OpenAI `/embeddings` endpoint and runs pgvector query. |
+| 5 | `link_analysis_tool` | No | Local graph and neighborhood analysis (optional TM neighborhood fetches). |
+| 6 | `reasoning_tool` | Yes | Calls OpenAI `/chat/completions` with strict JSON contract for structured reasoning payload. |
+| 7 | `recommendation_tool` | No | Local recommendation synthesis from context/pattern/similarity/reasoning output. |
+| 8 | `rule_draft_tool` | No | Local rule draft generation from recommendations and evidence. |
+| 9 | `completion_node` | No | Final state assembly, persistence, and confidence/severity finalization. |
+
+Important implications:
+- LLM is used only in planner and reasoning stages.
+- `similarity_tool` depends on an embedding service endpoint, but it is an embedding API call, not the chat model reasoning path.
+- `recommendation_tool` and `rule_draft_tool` are deterministic post-processing; they do not call LLM in runtime.
+
 If reasoning LLM fails/times out/parses poorly, the tool emits evidence-based fallback reasoning instead of failing the whole investigation.
+
+### Agentic scope
+
+- This is agentic orchestration: LLM-guided tool selection plus adaptive sequencing.
+- It is not autonomous adjudication: final fraud disposition and rule activation remain governed outside this service.
 
 ## Safety and Governance
 

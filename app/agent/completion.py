@@ -108,6 +108,55 @@ async def completion_node(
 
         completed_at = utc_now().isoformat()
 
+        terminal_status = str(state.get("status") or "").upper()
+        if terminal_status in {"FAILED", "TIMED_OUT"}:
+            final_state: InvestigationState = {
+                **state,
+                "status": terminal_status,
+                "completed_at": completed_at,
+            }
+
+            span.set_attribute("status", terminal_status)
+            span.set_attribute("confidence_score", float(final_state.get("confidence_score", 0.0)))
+            span.set_attribute("severity", str(final_state.get("severity", "LOW")).upper())
+            span.set_attribute("step_count", state.get("step_count", 0))
+
+            if state_store is not None:
+                try:
+                    await state_store.save_state(
+                        investigation_id=investigation_id,
+                        state=dict(final_state),
+                    )
+                except Exception:
+                    logger.error(
+                        "Failed to persist final state",
+                        investigation_id=investigation_id,
+                        exc_info=True,
+                    )
+                    span.set_attribute("state_persist_error", True)
+
+            severity_label = str(final_state.get("severity", "LOW")).upper() or "LOW"
+            ops_agent_investigation_completed_total.labels(
+                status=terminal_status,
+                severity=severity_label,
+            ).inc()
+            ops_agent_investigation_steps.labels(status=terminal_status).observe(
+                state.get("step_count", 0)
+            )
+
+            logger.info(
+                "Investigation completed",
+                investigation_id=investigation_id,
+                status=terminal_status,
+                severity=severity_label,
+                confidence=float(final_state.get("confidence_score", 0.0)),
+                step_count=state.get("step_count", 0),
+                tool_count=len(state.get("completed_steps", [])),
+                recommendation_count=len(state.get("recommendations", [])),
+            )
+
+            return final_state
+
         # Step 2: Compute final confidence
         confidence = _compute_final_confidence(state)
 

@@ -81,6 +81,8 @@ Open `htmlcov/index.html` in a browser for line/branch coverage review.
 - Scenario assertions should focus on stable invariants (severity floor, recommendation behavior, response contracts) to avoid environment-specific false negatives.
 - HTML report `evidence_summary` is derived from `evidence_payload`; if no evidence is returned by API the field is intentionally `[]`.
 - `scripts/docker_guard.py` preflight enforces local Docker target correctness, TM dependency readiness, and stale-container detection before scenario execution.
+- `tests/e2e/test_scenarios.py` is the pytest harness (currently 24 collected tests), including explicit preflight checks, KPI gate, and acknowledge-flow contract tests.
+- `scripts/run_e2e_matrix_detailed.py` is the matrix harness (31 rows) with richer stage audit and KPI reporting.
 
 ## CI Guidance
 

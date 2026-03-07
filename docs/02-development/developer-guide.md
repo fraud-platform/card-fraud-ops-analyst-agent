@@ -71,7 +71,7 @@ Primary modules:
 
 - `OPS_AGENT_ENABLE_LLM_REASONING=true` keeps reasoning stage active.
 - `VECTOR_ENABLED=true` enables embedding + similarity retrieval.
-- `LLM_PROVIDER`, `LLM_BASE_URL`, and `OLLAMA_API_KEY` must be set in Doppler.
+- `LLM_PROVIDER`, `LLM_BASE_URL`, and `LLM_API_KEY` must be set in Doppler.
 - Planner and reasoning are LLM-backed with guarded fallback behavior for error resilience.
 
 ## Quality Gate Policy

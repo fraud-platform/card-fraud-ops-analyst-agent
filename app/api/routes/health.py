@@ -103,20 +103,25 @@ async def _check_embedding_service(settings) -> bool | None:
         async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             base_url = config.api_base.rstrip("/")
             response = await client.post(
-                f"{base_url}/embed",
-                json={"model": config.model_name, "input": "ready-check"},
+                f"{base_url}/embeddings",
+                json={
+                    "model": config.model_name,
+                    "input": "ready-check",
+                    "dimensions": config.dimension,
+                },
                 headers=headers,
             )
             if response.status_code == 200:
                 payload = response.json() if response.content else {}
-                embeddings = payload.get("embeddings")
-                if isinstance(embeddings, list) and embeddings:
-                    first = embeddings[0]
-                    if isinstance(first, list) and first:
+                data_list = payload.get("data")
+                if isinstance(data_list, list) and data_list:
+                    first = data_list[0]
+                    if (
+                        isinstance(first, dict)
+                        and isinstance(first.get("embedding"), list)
+                        and first.get("embedding")
+                    ):
                         return True
-                embedding = payload.get("embedding")
-                if isinstance(embedding, list) and embedding:
-                    return True
                 logger.warning(
                     "Embedding service readiness payload missing embedding vectors",
                     extra={"status_code": response.status_code},

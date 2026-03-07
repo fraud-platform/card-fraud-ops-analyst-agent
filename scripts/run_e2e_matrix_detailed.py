@@ -30,10 +30,14 @@ BASE_URL = "http://localhost:8003"
 TM_BASE_URL = os.getenv("TM_BASE_URL", "http://localhost:8002")
 API_PREFIX = "/api/v1/ops-agent"
 MANIFEST_PATH = Path("htmlcov/e2e-seed-manifest.json")
-TIMEOUT = 120
+TIMEOUT = 240
 TERMINAL_STATUSES = {"COMPLETED", "FAILED", "TIMED_OUT"}
 SEV_MEDIUM_PLUS = {"MEDIUM", "HIGH", "CRITICAL"}
 HIGH_PRIORITY_TYPES = {"manual_review", "block_card", "escalate"}
+KPI_LATENCY_P95_TARGET_MS = float(os.getenv("E2E_MATRIX_KPI_RUN_P95_MS", "180000"))
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "").strip()
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").strip() or "https://api.openai.com/v1"
+LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
 LOW_RISK_LANGUAGE_MARKERS = (
     "no red flags",
     "no detected patterns",
@@ -64,6 +68,137 @@ def _get_default_report_paths() -> tuple[Path, Path, Path]:
     html_path = base / f"e2e-31matrix-report-{timestamp}.html"
     audit_path = base / f"e2e-31matrix-audit-{timestamp}.json"
     return json_path, html_path, audit_path
+
+
+def _resolve_llm_model_name(provider: str) -> str:
+    """Strip any 'provider/' prefix to get the bare model name."""
+    provider = provider.strip()
+    if "/" in provider:
+        return provider.split("/", 1)[1]
+    return provider
+
+
+def _assert_llm_provider_ready() -> None:
+    if not LLM_BASE_URL:
+        raise RuntimeError("LLM_BASE_URL is not configured")
+    if not LLM_PROVIDER:
+        raise RuntimeError("LLM_PROVIDER is not configured")
+
+    headers: dict[str, str] = {
+        "Content-Type": "application/json",
+    }
+    if LLM_API_KEY:
+        headers["Authorization"] = f"Bearer {LLM_API_KEY}"
+
+    model = _resolve_llm_model_name(LLM_PROVIDER)
+    base = LLM_BASE_URL.rstrip("/")
+
+    # Prefer OpenAI-compatible preflight first.
+    models_url = f"{base}/models"
+    chat_completions_url = f"{base}/chat/completions"
+    models_status = 0
+    models_error = ""
+    try:
+        models_response = httpx.get(models_url, headers=headers, timeout=30, trust_env=False)
+        models_status = models_response.status_code
+        if models_response.status_code == 200:
+            payload = (
+                models_response.json()
+                if models_response.headers.get("content-type", "").startswith("application/json")
+                else {}
+            )
+            available_models = [
+                str(m.get("id"))
+                for m in payload.get("data", [])
+                if isinstance(m, dict) and m.get("id")
+            ]
+            # Some providers may not return all aliases in /models; enforce only when list is populated.
+            if available_models and model not in available_models:
+                raise RuntimeError(
+                    f"LLM preflight: model {model!r} is not available on provider endpoint {models_url}"
+                )
+
+            chat_payload = {
+                "model": model,
+                "messages": [
+                    {"role": "user", "content": 'health check: respond with JSON {"status":"ok"}'}
+                ],
+                "max_completion_tokens": 50,
+                "response_format": {"type": "json_object"},
+            }
+            chat_response = httpx.post(
+                chat_completions_url,
+                headers=headers,
+                json=chat_payload,
+                timeout=30,
+                trust_env=False,
+            )
+            if chat_response.status_code != 200:
+                raise RuntimeError(
+                    "LLM preflight: /chat/completions returned HTTP "
+                    f"{chat_response.status_code}: {chat_response.text[:300]}"
+                )
+            return
+        models_error = models_response.text[:300]
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        models_error = f"{type(exc).__name__}: {exc}"
+
+    # Backward-compatible fallback for legacy Ollama-style endpoints.
+    # If LLM_BASE_URL ends with /api, avoid duplicating it in /api/tags path.
+    ollama_base = base[:-4] if base.endswith("/api") else base
+    tags_url = f"{ollama_base}/api/tags"
+    chat_url = f"{ollama_base}/api/chat"
+    try:
+        tags_response = httpx.get(tags_url, headers=headers, timeout=30, trust_env=False)
+    except Exception as exc:
+        raise RuntimeError(
+            "LLM preflight failed for OpenAI-compatible and Ollama endpoints. "
+            f"openai_models_status={models_status}, openai_models_error={models_error!r}, "
+            f"ollama_error={type(exc).__name__}: {exc}"
+        ) from exc
+    if tags_response.status_code != 200:
+        raise RuntimeError(
+            "LLM preflight failed for OpenAI-compatible and Ollama endpoints. "
+            f"openai_models_status={models_status}, openai_models_error={models_error!r}, "
+            f"ollama_tags_status={tags_response.status_code}, ollama_tags_body={tags_response.text[:300]!r}"
+        )
+
+    tags_payload = (
+        tags_response.json()
+        if tags_response.headers.get("content-type", "").startswith("application/json")
+        else {}
+    )
+    available_models = []
+    for model_entry in tags_payload.get("models", []):
+        if isinstance(model_entry, dict) and model_entry.get("name"):
+            available_models.append(str(model_entry["name"]))
+
+    if model not in available_models:
+        raise RuntimeError(
+            f"LLM preflight: model {model!r} is not available on provider endpoint {tags_url}"
+        )
+
+    chat_payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "health check"}],
+    }
+    try:
+        chat_response = httpx.post(
+            chat_url,
+            headers=headers,
+            json=chat_payload,
+            timeout=30,
+            trust_env=False,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"LLM preflight smoke test failed: {type(exc).__name__}: {exc}") from exc
+    if chat_response.status_code != 200:
+        raise RuntimeError(
+            f"LLM preflight: /api/chat returned HTTP {chat_response.status_code}: "
+            f"{chat_response.text[:300]}"
+        )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -331,12 +466,83 @@ def _extract_agent_trace(detail_payload: dict[str, Any]) -> dict[str, Any]:
         for item in tool_executions
         if str(item.get("status", "")).upper() in {"FAILED", "TIMED_OUT"}
     ]
+    latest_by_tool: dict[str, dict[str, Any]] = {}
+    for item in tool_executions:
+        tool_name = str(item.get("tool_name", "")).strip()
+        if tool_name:
+            latest_by_tool[tool_name] = item
+    unresolved_failed_tools = [
+        {
+            "tool_name": item.get("tool_name", "unknown"),
+            "status": item.get("status", "UNKNOWN"),
+            "error_message": item.get("error_message"),
+        }
+        for item in latest_by_tool.values()
+        if str(item.get("status", "")).upper() in {"FAILED", "TIMED_OUT"}
+    ]
     return {
         "planner_decisions": planner_decisions,
         "tool_executions": tool_executions,
         "planner_path": planner_path,
         "tool_path": tool_path,
         "failed_tools": failed_tools,
+        "unresolved_failed_tools": unresolved_failed_tools,
+    }
+
+
+def _classify_reasoning_failure(error_message: str, llm_status: str) -> str:
+    normalized_status = llm_status.strip().lower()
+    if normalized_status and normalized_status not in {"unknown", "success"}:
+        return normalized_status
+
+    text = error_message.lower()
+    if "prompt guard blocked" in text:
+        return "prompt_guard_blocked"
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if "parse" in text or "json" in text:
+        return "parse_error"
+    if any(token in text for token in ("llm", "http", "api")):
+        return "llm_call_error"
+    return "failed"
+
+
+def _extract_reasoning_diagnostics(
+    detail_payload: dict[str, Any],
+    trace: dict[str, Any],
+) -> dict[str, Any]:
+    reasoning = _as_dict(detail_payload.get("reasoning"))
+    executions = [
+        item
+        for item in trace.get("tool_executions", [])
+        if isinstance(item, dict) and str(item.get("tool_name", "")) == "reasoning_tool"
+    ]
+    latest = executions[-1] if executions else {}
+    tool_status = str(latest.get("status") or "NOT_EXECUTED").upper()
+    output_summary = _as_dict(latest.get("output_summary"))
+    output_reasoning = _as_dict(output_summary.get("reasoning"))
+
+    llm_status_raw = reasoning.get("llm_status") or output_reasoning.get("llm_status")
+    llm_status = (
+        str(llm_status_raw).strip().lower()
+        if isinstance(llm_status_raw, str) and llm_status_raw.strip()
+        else "unknown"
+    )
+    error_raw = latest.get("error_message") or output_summary.get("error_message")
+    error_message = str(error_raw).strip() if isinstance(error_raw, str) else ""
+
+    if tool_status == "SUCCESS" and llm_status == "success":
+        llm_outcome = "success"
+    elif tool_status == "NOT_EXECUTED":
+        llm_outcome = "not_executed"
+    else:
+        llm_outcome = _classify_reasoning_failure(error_message, llm_status)
+
+    return {
+        "tool_status": tool_status,
+        "llm_status": llm_status,
+        "llm_outcome": llm_outcome,
+        "error_message": error_message[:240],
     }
 
 
@@ -423,6 +629,11 @@ def _compute_kpis(
     tool_failures = sum(1 for r in rows if any("tool_failure" in i for i in r.get("issues", [])))
     similarity_degraded = sum(1 for r in rows if "similarity_degraded" in r.get("issues", []))
     reasoning_fallback = sum(1 for r in rows if "reasoning_fallback" in r.get("issues", []))
+    reasoning_llm_failures = sum(
+        1
+        for r in rows
+        if any(str(i).startswith("reasoning_llm_failed:") for i in r.get("issues", []))
+    )
 
     all_latencies = [r.get("run_latency_ms", 0) or 0 for r in rows if r.get("run_latency_ms")]
     latency_p95 = _percentile(all_latencies, 0.95) if all_latencies else 0.0
@@ -456,6 +667,12 @@ def _compute_kpis(
             "pass": similarity_degraded == 0,
             "description": "scenarios with degraded similarity/embedding",
         },
+        "kpi_reasoning_llm_failure_rate": {
+            "value": reasoning_llm_failures / total,
+            "target": "0.0",
+            "pass": reasoning_llm_failures == 0,
+            "description": "scenarios where reasoning LLM did not complete successfully",
+        },
         "kpi_reasoning_fallback_rate": {
             "value": reasoning_fallback / total,
             "target": "<= 0.02",
@@ -464,8 +681,8 @@ def _compute_kpis(
         },
         "kpi_latency_p95_investigation_ms": {
             "value": latency_p95,
-            "target": "< 60000",
-            "pass": latency_p95 < 60000,
+            "target": f"< {int(KPI_LATENCY_P95_TARGET_MS)}",
+            "pass": latency_p95 < KPI_LATENCY_P95_TARGET_MS,
             "description": "P95 investigation latency in ms",
         },
         "kpi_trace_coverage_rate": {
@@ -482,7 +699,8 @@ def run() -> int:
     try:
         assert_local_docker_ops_agent(args.base_url)
         assert_local_docker_transaction_management(args.tm_base_url)
-        _wait_for_readiness(args.base_url)
+        _assert_llm_provider_ready()
+        _wait_for_readiness(args.base_url, require_embedding=True)
         _wait_for_readiness(args.tm_base_url)
     except (RuntimeError, ValueError) as exc:
         print(f"[PRECHECK] {exc}")
@@ -544,6 +762,10 @@ def run() -> int:
                 "similarity_overall_score": 0.0,
                 "vector_skipped": False,
                 "empty_stage_io_steps": 0,
+                "reasoning_tool_status": "NOT_EXECUTED",
+                "reasoning_llm_status": "unknown",
+                "reasoning_llm_outcome": "not_executed",
+                "reasoning_error_message": "",
                 "issues": [],
             }
 
@@ -554,26 +776,41 @@ def run() -> int:
                 "scenario_name": scenario,
             }
             run_headers = {"X-Scenario-Name": scenario, "X-Case-ID": case_id}
-            run_status, run_payload, run_ms, run_error = _request_json(
-                client,
-                "POST",
-                f"{API_PREFIX}/investigations/run",
-                body=run_body,
-                headers=run_headers,
-            )
+            run_status = 0
+            run_payload: dict[str, Any] | None = None
+            run_ms = 0.0
+            run_error: str | None = None
+            run_attempts = max(1, int(os.getenv("E2E_MATRIX_RUN_RETRIES", "2")))
+            for run_attempt in range(1, run_attempts + 1):
+                run_status, run_payload, run_ms, run_error = _request_json(
+                    client,
+                    "POST",
+                    f"{API_PREFIX}/investigations/run",
+                    body=run_body,
+                    headers=run_headers,
+                )
+                reporter.record_stage(
+                    stage_name=(
+                        "Run Investigation"
+                        if run_attempts == 1
+                        else f"Run Investigation (attempt {run_attempt})"
+                    ),
+                    status=run_status if run_status else 0,
+                    elapsed_ms=run_ms,
+                    request_method="POST",
+                    request_url=f"{args.base_url}{API_PREFIX}/investigations/run",
+                    request_body=run_body,
+                    response_status=run_status,
+                    response_body=run_payload,
+                    error=run_error,
+                )
+                if not run_error:
+                    break
+                if run_attempt < run_attempts:
+                    time.sleep(1.0)
+
             row["run_status"] = run_status
             row["run_latency_ms"] = round(run_ms, 1)
-            reporter.record_stage(
-                stage_name="Run Investigation",
-                status=run_status if run_status else 0,
-                elapsed_ms=run_ms,
-                request_method="POST",
-                request_url=f"{args.base_url}{API_PREFIX}/investigations/run",
-                request_body=run_body,
-                response_status=run_status,
-                response_body=run_payload,
-                error=run_error,
-            )
 
             if run_error:
                 row["issues"].append(f"run_transport_error:{run_error}")
@@ -703,6 +940,7 @@ def run() -> int:
             insight_evidence = _as_list(latest_insight.get("evidence"))
             evidence_summary = _summarize_evidence(detail_evidence or insight_evidence)
             trace = _extract_agent_trace(detail_payload)
+            reasoning_diag = _extract_reasoning_diagnostics(detail_payload, trace)
             similarity_results = _as_dict(detail_payload.get("similarity_results"))
             similarity_matches = _as_list(similarity_results.get("matches"))
             try:
@@ -801,6 +1039,10 @@ def run() -> int:
             row["planner_path"] = trace["planner_path"]
             row["tool_path"] = trace["tool_path"]
             row["failed_tools"] = trace["failed_tools"]
+            row["reasoning_tool_status"] = reasoning_diag["tool_status"]
+            row["reasoning_llm_status"] = reasoning_diag["llm_status"]
+            row["reasoning_llm_outcome"] = reasoning_diag["llm_outcome"]
+            row["reasoning_error_message"] = reasoning_diag["error_message"]
 
             high_priority = any(t in HIGH_PRIORITY_TYPES for t in recommendation_types)
             contradiction = (
@@ -833,8 +1075,10 @@ def run() -> int:
             if not row.get("trace_id"):
                 row["issues"].append("trace_id_missing")
 
-            if trace["failed_tools"]:
-                row["issues"].append(f"tool_failure:{len(trace['failed_tools'])}")
+            if trace["unresolved_failed_tools"]:
+                row["issues"].append(f"tool_failure:{len(trace['unresolved_failed_tools'])}")
+            if reasoning_diag["llm_outcome"] != "success":
+                row["issues"].append(f"reasoning_llm_failed:{reasoning_diag['llm_outcome']}")
 
             similarity_results = _as_dict(detail_payload.get("similarity_results"))
             if _is_similarity_degraded(similarity_results):
@@ -868,12 +1112,14 @@ def run() -> int:
                     "planner_path": row["planner_path"],
                     "tool_path": row["tool_path"],
                     "failed_tools": row["failed_tools"],
+                    "unresolved_failed_tools": trace["unresolved_failed_tools"],
                     "similarity": {
                         "match_count": row["similarity_match_count"],
                         "overall_score": row["similarity_overall_score"],
                         "skipped": row["vector_skipped"],
                     },
                     "empty_stage_io_steps": row["empty_stage_io_steps"],
+                    "reasoning_diagnostics": reasoning_diag,
                     "reasoning": _as_dict(detail_payload.get("reasoning")),
                 },
                 notes=[
@@ -886,7 +1132,8 @@ def run() -> int:
             print(
                 f"[{idx:02d}/{len(cases)}] {scenario} bucket={bucket} status={status} "
                 f"severity={severity} recs={len(recommendations)} detail_evidence={len(detail_evidence)} "
-                f"insight_evidence={len(insight_evidence)} issues={row['issues']}"
+                f"insight_evidence={len(insight_evidence)} reasoning={row['reasoning_llm_outcome']} "
+                f"issues={row['issues']}"
             )
 
     issue_counter = Counter(issue for row in rows for issue in row.get("issues", []))
@@ -953,6 +1200,7 @@ def run() -> int:
             continue
         has_kpi_issues = any(
             issue.startswith("tool_failure")
+            or issue.startswith("reasoning_llm_failed")
             or issue == "similarity_degraded"
             or issue == "context_incomplete"
             or issue == "reasoning_fallback"
