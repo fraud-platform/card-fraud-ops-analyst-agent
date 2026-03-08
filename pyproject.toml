@@ -47,6 +47,7 @@ dev = [
 [project.scripts]
 # Development
 dev = "cli.dev:main"
+platform-adapter = "cli.platform_adapter:main"
 
 # Auth0 bootstrap and verification
 auth0-bootstrap = "cli.auth0_bootstrap:main"

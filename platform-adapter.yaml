@@ -1,0 +1,76 @@
+service: ops-analyst-agent
+version: "1.0"
+entrypoints:
+  service:
+    status:
+      command: [uv, run, platform-adapter, service, status]
+      destructive: false
+      timeout_seconds: 60
+      mode: [suite]
+      description: Check service status endpoint.
+    health:
+      command: [uv, run, platform-adapter, service, health]
+      destructive: false
+      timeout_seconds: 60
+      mode: [suite]
+      description: Check service readiness endpoint.
+    logs:
+      command: [uv, run, platform-adapter, service, logs]
+      destructive: false
+      timeout_seconds: 60
+      mode: [suite]
+      description: Return logs guidance for the service.
+  db:
+    verify:
+      command: [uv, run, platform-adapter, db, verify]
+      destructive: false
+      timeout_seconds: 60
+      mode: [suite]
+      description: Verify database connectivity.
+    init:
+      command: [uv, run, platform-adapter, db, init]
+      destructive: false
+      timeout_seconds: 180
+      mode: [suite]
+      description: Initialize database schema.
+    db-reset-data:
+      command: [uv, run, platform-adapter, db, db-reset-data]
+      destructive: true
+      requires_confirmation: true
+      timeout_seconds: 300
+      mode: [suite]
+      description: Clear service-owned rows while preserving schema/tables.
+    db-reset-tables:
+      command: [uv, run, platform-adapter, db, db-reset-tables]
+      destructive: true
+      requires_confirmation: true
+      timeout_seconds: 300
+      mode: [suite]
+      description: Drop and recreate service-owned tables only.
+  auth:
+    verify:
+      command: [uv, run, platform-adapter, auth, verify]
+      destructive: false
+      timeout_seconds: 60
+      mode: [suite]
+      description: Verify Auth0 configuration.
+    bootstrap:
+      command: [uv, run, platform-adapter, auth, bootstrap]
+      destructive: false
+      timeout_seconds: 180
+      mode: [suite]
+      description: Bootstrap Auth0 resources.
+  seed:
+    load-test-data:
+      command: [uv, run, platform-adapter, seed, load-test-data]
+      destructive: false
+      timeout_seconds: 180
+      mode: [suite]
+      description: Load seed data for investigations.
+  verify:
+    preflight:
+      command: [uv, run, platform-adapter, verify, preflight]
+      destructive: false
+      timeout_seconds: 180
+      mode: [suite]
+      description: Run preflight smoke validation.
