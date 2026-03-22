@@ -110,7 +110,7 @@ uv run doppler-local                                   # Dev server with Doppler
 uv run doppler-local-test                              # Run tests with local DB
 
 # Auth0 setup (one-time)
-uv run auth0-bootstrap --yes --verbose                 # Bootstrap Auth0 API + M2M app
+uv run auth0-bootstrap --yes --verbose                 # Bootstrap Auth0 API + M2M app (shared M2M permissions normalization is deployed by rule-management)
 uv run auth0-verify                                    # Verify Auth0 configuration
 
 # Database

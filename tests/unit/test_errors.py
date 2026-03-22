@@ -6,6 +6,7 @@ from app.core.errors import (
     InternalError,
     NotFoundError,
     OpsAgentError,
+    UnauthorizedError,
     ValidationError,
     get_status_code,
 )
@@ -28,6 +29,12 @@ def test_not_found_error():
     error = NotFoundError("not found")
     assert error.code == "OPS_AGENT_NOT_FOUND"
     assert error.status_code == 404
+
+
+def test_unauthorized_error():
+    error = UnauthorizedError("unauthorized")
+    assert error.code == "OPS_AGENT_UNAUTHORIZED"
+    assert error.status_code == 401
 
 
 def test_forbidden_error():
@@ -58,4 +65,5 @@ def test_get_status_code():
     assert get_status_code(NotFoundError("test")) == 404
     assert get_status_code(ForbiddenError("test")) == 403
     assert get_status_code(ConflictError("test")) == 409
+    assert get_status_code(UnauthorizedError("test")) == 401
     assert get_status_code(OpsAgentError("test")) == 500

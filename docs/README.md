@@ -1,8 +1,9 @@
-﻿# Card Fraud Ops Analyst Agent Documentation
+# Card Fraud Ops Analyst Agent Documentation
 
 Prometheus scraping endpoint: `/api/v1/metrics` requires `X-Metrics-Token` (`METRICS_TOKEN`).
 
 Documentation-first repository for enterprise-grade ops analyst agent implementation and operations.
+Shared M2M normalization comes from the rule-management credentials-exchange Action, which mirrors issued access-token scopes into `permissions`.
 
 ## Documentation Standards
 

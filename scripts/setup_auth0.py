@@ -12,7 +12,10 @@ Required environment variables:
 - AUTH0_MGMT_DOMAIN              e.g. dev-xxxx.us.auth0.com
 - AUTH0_MGMT_CLIENT_ID
 - AUTH0_MGMT_CLIENT_SECRET
-- AUTH0_AUDIENCE                 e.g. https://fraud-ops-analyst-agent-api
+- OPS_ANALYST_AUTH0_AUDIENCE     e.g. https://fraud-ops-analyst-agent-api
+
+Legacy fallback:
+- AUTH0_AUDIENCE                 accepted when OPS_ANALYST_AUTH0_AUDIENCE is not set
 
 Optional environment variables:
 - AUTH0_API_NAME                 default: Fraud Ops Analyst Agent API
@@ -335,7 +338,11 @@ def load_settings() -> Settings:
     mgmt_domain = _required_env("AUTH0_MGMT_DOMAIN").strip()
     mgmt_client_id = _required_env("AUTH0_MGMT_CLIENT_ID").strip()
     mgmt_client_secret = _required_env("AUTH0_MGMT_CLIENT_SECRET").strip()
-    audience = _required_env("AUTH0_AUDIENCE").strip()
+    audience = (
+        os.getenv("OPS_ANALYST_AUTH0_AUDIENCE") or os.getenv("AUTH0_AUDIENCE") or ""
+    ).strip()
+    if not audience:
+        raise SystemExit("Missing required env var: OPS_ANALYST_AUTH0_AUDIENCE")
 
     return Settings(
         mgmt_domain=mgmt_domain,

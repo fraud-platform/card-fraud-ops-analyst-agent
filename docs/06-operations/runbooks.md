@@ -484,6 +484,7 @@ grep "409" /var/log/ops-agent/app.log | tail -20
 ```bash
 # Check Auth0 configuration
 doppler secrets get AUTH0_DOMAIN
+doppler secrets get AUTH0_USER_AUDIENCE
 doppler secrets get AUTH0_AUDIENCE
 
 # Test JWKS endpoint
@@ -508,7 +509,7 @@ curl https://$AUTH0_DOMAIN/.well-known/jwks.json
 2. **If token is invalid:**
    - Verify token includes required scopes
    - Check token expiration (`exp` claim)
-   - Verify `aud` matches `AUTH0_AUDIENCE`
+   - Verify `aud` matches either `AUTH0_USER_AUDIENCE` or `AUTH0_AUDIENCE`
 
 3. **If Auth0 tenant is down:**
    - Check Auth0 status page: https://status.auth0.com/

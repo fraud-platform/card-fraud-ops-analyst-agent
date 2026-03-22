@@ -17,6 +17,7 @@ Autonomous fraud investigation pipeline. Given a transaction ID it:
 
 **Final fraud and rule activation decisions are always human-controlled.**
 `OPS_AGENT_ENFORCE_HUMAN_APPROVAL=true` must never be disabled.
+Auth note: the shared rule-management credentials-exchange Action mirrors issued M2M access-token scopes into `permissions`, so backend auth reads one claim for both human and M2M traffic.
 
 ---
 

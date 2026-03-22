@@ -62,7 +62,9 @@ JSON Web Token (JWT) validation is implemented in `app/core/auth.py` using Auth0
 2. Fetch JWKS from `https://{AUTH0_DOMAIN}/.well-known/jwks.json`
 3. Match token `kid` header to JWKS key
 4. Verify signature using RS256 algorithm
-5. Validate audience (`AUTH0_AUDIENCE`) and issuer (`https://{AUTH0_DOMAIN}/`)
+5. Validate issuer (`https://{AUTH0_DOMAIN}/`) and accept either the shared
+   human-user audience (`AUTH0_USER_AUDIENCE`) or the service M2M audience
+   (`AUTH0_AUDIENCE`)
 6. Extract permissions/scopes from token payload
 
 ### Environment Variables
@@ -70,7 +72,8 @@ JSON Web Token (JWT) validation is implemented in `app/core/auth.py` using Auth0
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `AUTH0_DOMAIN` | string | — | Auth0 tenant domain (e.g., `dev-gix6qllz7yvs0rl8.us.auth0.com`) |
-| `AUTH0_AUDIENCE` | string | — | API audience identifier (e.g., `https://fraud-ops-analyst-agent-api`) |
+| `AUTH0_USER_AUDIENCE` | string | — | Shared human-user audience for portal-issued browser tokens |
+| `AUTH0_AUDIENCE` | string | — | Ops Agent M2M audience identifier used for service-to-service calls |
 | `AUTH0_ALGORITHMS` | string | `RS256` | Signature algorithms (comma-separated) |
 | `AUTH0_JWKS_CACHE_TTL` | int | `3600` | JWKS cache duration in seconds (default: 1 hour) |
 
@@ -288,7 +291,8 @@ All Auth0 variables use the `AUTH0_` prefix and map to `Auth0Config` in `app/cor
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `AUTH0_DOMAIN` | string | — | Auth0 tenant domain |
-| `AUTH0_AUDIENCE` | string | — | API audience identifier |
+| `AUTH0_USER_AUDIENCE` | string | — | Shared human-user audience for portal-issued browser tokens |
+| `AUTH0_AUDIENCE` | string | — | Ops Agent M2M audience identifier |
 | `AUTH0_CLIENT_ID` | string | — | M2M client ID for service-to-service calls |
 | `AUTH0_CLIENT_SECRET` | SecretStr | — | M2M client secret |
 | `AUTH0_ALGORITHMS` | string | `RS256` | Signature algorithms (comma-separated) |

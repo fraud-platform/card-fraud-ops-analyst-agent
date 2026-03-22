@@ -65,7 +65,7 @@ Verify secrets are available:
 doppler secrets --only-names
 ```
 
-Expected secrets include: `DATABASE_URL_APP`, `DATABASE_URL_ADMIN`, `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`, `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`.
+Expected secrets include: `DATABASE_URL_APP`, `DATABASE_URL_ADMIN`, `AUTH0_DOMAIN`, `AUTH0_USER_AUDIENCE`, `OPS_ANALYST_AUTH0_AUDIENCE`, `AUTH0_AUDIENCE` (legacy fallback), `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`.
 
 ### 3. Install Dependencies
 
@@ -80,7 +80,7 @@ This installs all runtime and dev dependencies. Never use `pip install` directly
 If this is a fresh environment and Auth0 has not been configured yet:
 
 ```bash
-# Bootstrap Auth0 API + M2M client and sync to Doppler
+# Bootstrap the ops-agent Auth0 API + M2M client and sync to Doppler
 uv run auth0-bootstrap --yes --verbose
 
 # Verify the configuration
@@ -88,6 +88,7 @@ uv run auth0-verify
 ```
 
 Note: Auth0 bootstrap must be run for `card-fraud-rule-management` first if both projects share the same tenant.
+This repo accepts the platform shared human-user audience for portal traffic and keeps the ops-agent M2M audience for service-to-service traffic.
 
 ### 5. Initialize Database Tables
 

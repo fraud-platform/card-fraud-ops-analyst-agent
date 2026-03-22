@@ -107,6 +107,23 @@ def test_auth0_config_defaults(monkeypatch):
     config = Auth0Config()
     assert config.jwks_url == "https:///.well-known/jwks.json"
     assert config.algorithms_list == ["RS256"]
+    assert config.accepted_audiences == ()
+
+
+def test_auth0_config_accepted_audiences_prefers_user_audience():
+    config = Auth0Config(
+        audience="https://fraud-ops-analyst-agent-api",
+        user_audience="https://fraud-portal-user-api",
+    )
+    assert config.accepted_audiences == (
+        "https://fraud-portal-user-api",
+        "https://fraud-ops-analyst-agent-api",
+    )
+
+
+def test_auth0_config_accepted_audiences_falls_back_to_service_audience():
+    config = Auth0Config(audience="https://fraud-ops-analyst-agent-api")
+    assert config.accepted_audiences == ("https://fraud-ops-analyst-agent-api",)
 
 
 def test_security_config_defaults(monkeypatch):

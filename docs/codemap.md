@@ -1,6 +1,7 @@
 # Code Map
 
 Current implementation map for the LangGraph-based agentic fraud ops analyst service.
+Shared M2M normalization comes from the rule-management credentials-exchange Action, which mirrors issued access-token scopes into `permissions`.
 
 ## Top-Level Layout
 

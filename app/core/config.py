@@ -179,6 +179,7 @@ class DatabaseConfig(BaseSettings):
 class Auth0Config(BaseSettings):
     domain: str = Field(default="")
     audience: str = Field(default="")
+    user_audience: str = Field(default="")
     client_id: str = Field(default="")
     client_secret: SecretStr = Field(default=SecretStr(""))
     algorithms: str = Field(default="RS256")
@@ -198,6 +199,20 @@ class Auth0Config(BaseSettings):
     @property
     def algorithms_list(self) -> list[str]:
         return [algo.strip() for algo in self.algorithms.split(",")]
+
+    @property
+    def accepted_audiences(self) -> tuple[str, ...]:
+        """Return audiences accepted for inbound JWT validation.
+
+        The shared portal audience is preferred when it is configured, but the
+        service audience remains accepted so M2M/service-to-service traffic keeps
+        working during the migration.
+        """
+        audiences: list[str] = []
+        for audience in (self.user_audience, self.audience):
+            if audience and audience not in audiences:
+                audiences.append(audience)
+        return tuple(audiences)
 
 
 class SecurityConfig(BaseSettings):

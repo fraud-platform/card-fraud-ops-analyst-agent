@@ -55,7 +55,9 @@ All requests require an Auth0 Bearer token:
 Authorization: Bearer <access_token>
 ```
 
-Auth0 audience: `https://fraud-ops-analyst-agent-api`
+Auth0 audience: `AUTH0_USER_AUDIENCE` for portal-issued browser tokens.
+The ops-agent service also continues to accept its service-specific M2M audience
+for internal service-to-service calls.
 Auth0 tenant: `dev-gix6qllz7yvs0rl8.us.auth0.com`
 
 ## Example Requests

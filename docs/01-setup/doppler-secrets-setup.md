@@ -22,7 +22,9 @@ be provisioned unless artifact export is implemented in a future phase.
 
 ### Ops Agent-specific
 
-- `AUTH0_AUDIENCE` (Ops Agent API audience)
+- `AUTH0_USER_AUDIENCE` (shared portal human-user audience; platform-owned)
+- `OPS_ANALYST_AUTH0_AUDIENCE` (Ops Agent M2M audience; service-owned)
+- `AUTH0_AUDIENCE` (legacy fallback for standalone scripts and older configs)
 - `AUTH0_CLIENT_ID` (service M2M)
 - `AUTH0_CLIENT_SECRET` (service M2M)
 

@@ -7,7 +7,10 @@ Required environment variables:
 - AUTH0_MGMT_DOMAIN
 - AUTH0_MGMT_CLIENT_ID
 - AUTH0_MGMT_CLIENT_SECRET
-- AUTH0_AUDIENCE
+- OPS_ANALYST_AUTH0_AUDIENCE
+
+Legacy fallback:
+- AUTH0_AUDIENCE (used when OPS_ANALYST_AUTH0_AUDIENCE is not set)
 """
 
 from __future__ import annotations
@@ -45,18 +48,24 @@ def main() -> int:
     domain = _required_env("AUTH0_MGMT_DOMAIN")
     client_id = _required_env("AUTH0_MGMT_CLIENT_ID")
     client_secret = _required_env("AUTH0_MGMT_CLIENT_SECRET")
-    audience = _required_env("AUTH0_AUDIENCE")
+    audience = os.getenv("OPS_ANALYST_AUTH0_AUDIENCE") or os.getenv("AUTH0_AUDIENCE")
+    if not audience:
+        print("FAIL: Missing required env var: OPS_ANALYST_AUTH0_AUDIENCE")
+        return 1
+
+    unified_audience = "https://fraud-governance-api"
 
     print("=" * 60)
     print("AUTH0 VERIFICATION - Ops Analyst Agent")
     print("=" * 60)
     print(f"\nTenant: {domain}")
-    print(f"Audience: {audience}")
+    print(f"Service Audience: {audience}")
+    print(f"Unified Audience: {unified_audience}")
 
     errors = []
 
     # Get management token
-    print("\n[1/3] Getting management token...")
+    print("\n[1/4] Getting management token...")
     try:
         token = _get_management_token(domain, client_id, client_secret)
         print("  OK: Management token obtained")
@@ -72,7 +81,7 @@ def main() -> int:
 
     try:
         # Check Resource Server
-        print("[2/3] Checking API (Resource Server)...")
+        print("[2/4] Checking API (Resource Server)...")
         resp = client.get("resource-servers", params={"identifier": audience})
         resp.raise_for_status()
         servers = resp.json()
@@ -103,7 +112,7 @@ def main() -> int:
             errors.append("API not found")
 
         # Check M2M Client
-        print("[3/3] Checking M2M application...")
+        print("[3/4] Checking M2M application...")
         m2m_name = os.getenv("AUTH0_M2M_APP_NAME", "Fraud Ops Analyst Agent M2M")
         resp = client.get("clients", params={"page": 0, "per_page": 100})
         resp.raise_for_status()
@@ -120,6 +129,24 @@ def main() -> int:
         else:
             print(f"  WARN: M2M client '{m2m_name}' not found")
             errors.append(f"M2M client '{m2m_name}' not found")
+
+        # Check Unified API (for human token validation from portal)
+        print("[4/4] Checking unified API (human token audience)...")
+        resp = client.get("resource-servers")
+        resp.raise_for_status()
+        all_servers = resp.json()
+        unified_found = False
+        if isinstance(all_servers, list):
+            for rs in all_servers:
+                if rs.get("identifier") == unified_audience:
+                    unified_found = True
+                    print(f"  OK: Unified API found: {rs.get('name')}")
+                    break
+        if not unified_found:
+            print(f"  WARN: Unified API '{unified_audience}' not found")
+            errors.append(
+                f"Unified API '{unified_audience}' not found (needed for portal human tokens)"
+            )
 
     finally:
         client.close()

@@ -91,7 +91,8 @@ These variables are always required and come from Doppler.
 | `DATABASE_URL_APP` | PostgreSQL connection string for the app user (read + write to `ops_agent_*`, read from `fraud_gov`) |
 | `DATABASE_URL_ADMIN` | PostgreSQL connection string for the admin user (DDL only, used by `db-init` scripts) |
 | `AUTH0_DOMAIN` | Auth0 tenant domain (e.g., `dev-gix6qllz7yvs0rl8.us.auth0.com`) |
-| `AUTH0_AUDIENCE` | Auth0 API audience (e.g., `https://fraud-ops-analyst-agent-api`) |
+| `AUTH0_USER_AUDIENCE` | Shared human-user audience for portal-issued browser tokens |
+| `OPS_ANALYST_AUTH0_AUDIENCE` | Ops Agent M2M audience for service-to-service calls |
 | `AUTH0_CLIENT_ID` | M2M client ID for service-to-service calls |
 | `AUTH0_CLIENT_SECRET` | M2M client secret (SecretStr) |
 

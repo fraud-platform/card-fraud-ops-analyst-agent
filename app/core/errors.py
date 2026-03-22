@@ -33,6 +33,13 @@ class NotFoundError(OpsAgentError):
     status_code = 404
 
 
+class UnauthorizedError(OpsAgentError):
+    """Authentication failure (missing/invalid/expired token)."""
+
+    code = "OPS_AGENT_UNAUTHORIZED"
+    status_code = 401
+
+
 class ForbiddenError(OpsAgentError):
     """Access forbidden due to scope/permission."""
 
@@ -123,6 +130,7 @@ class PlannerError(OpsAgentError):
 
 ERROR_STATUS_MAP: dict[type[OpsAgentError], int] = {
     ValidationError: 400,
+    UnauthorizedError: 401,
     NotFoundError: 404,
     ForbiddenError: 403,
     ConflictError: 409,
